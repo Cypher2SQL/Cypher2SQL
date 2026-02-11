@@ -1,0 +1,37 @@
+nodes:
+  - label: Person
+    table: people
+    primaryKey: id
+  - label: Movie
+    table: movies
+    primaryKey: id
+edges:
+  - type: ACTED_IN
+    kind: JOIN_TABLE
+    fromLabel: Person
+    toLabel: Movie
+    joinTable: people_movies
+    fromJoinKey: person_id
+    toJoinKey: movie_id
+  - type: MANAGES
+    kind: SELF_REFERENTIAL
+    label: Person
+    fromKey: manager_id
+    toKey: id
+  - type: AUTHORED
+    kind: ONE_TO_MANY
+    parentLabel: Person
+    childLabel: Movie
+    parentPrimaryKey: id
+    childForeignKey: author_id
+  - type: DIRECTS
+    kind: ONE_TO_MANY
+    parentLabel: Person
+    childLabel: Movie
+    parentPrimaryKey: id
+    childForeignKey: director_id
+  - type: FRIENDS_WITH
+    kind: SELF_REFERENTIAL
+    label: Person
+    fromKey: id
+    toKey: friend_id
