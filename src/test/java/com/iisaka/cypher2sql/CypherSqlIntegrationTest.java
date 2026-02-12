@@ -15,7 +15,7 @@ class CypherSqlIntegrationTest {
     @Test
     void parsesCypherAndRendersSql() {
         final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie)");
+        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie) RETURN p");
         final CypherSqlMapping mapping = new CypherSqlMapping(schema);
 
         final String sql = mapping.toSql(query).render(new BasicSqlDialect());
@@ -31,7 +31,7 @@ class CypherSqlIntegrationTest {
     @Test
     void rendersSelfReferentialJoin() {
         final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:MANAGES]->(m:Person)");
+        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:MANAGES]->(m:Person) RETURN p");
         final CypherSqlMapping mapping = new CypherSqlMapping(schema);
 
         final String sql = mapping.toSql(query).render(new BasicSqlDialect());
@@ -45,7 +45,7 @@ class CypherSqlIntegrationTest {
     @Test
     void rendersOneToManyJoinWhenParentIsLeftNode() {
         final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:AUTHORED]->(m:Movie)");
+        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:AUTHORED]->(m:Movie) RETURN p");
         final CypherSqlMapping mapping = new CypherSqlMapping(schema);
 
         final String sql = mapping.toSql(query).render(new BasicSqlDialect());
@@ -59,7 +59,7 @@ class CypherSqlIntegrationTest {
     @Test
     void rendersOneToManyJoinWhenParentIsRightNode() {
         final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
-        final CypherQuery query = CypherQuery.parse("MATCH (m:Movie)-[:AUTHORED]->(p:Person)");
+        final CypherQuery query = CypherQuery.parse("MATCH (m:Movie)-[:AUTHORED]->(p:Person) RETURN m");
         final CypherSqlMapping mapping = new CypherSqlMapping(schema);
 
         final String sql = mapping.toSql(query).render(new BasicSqlDialect());
@@ -73,7 +73,7 @@ class CypherSqlIntegrationTest {
     @Test
     void throwsWhenPatternIsMissing() {
         final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
-        final CypherQuery query = CypherQuery.parse("RETURN 1");
+        final CypherQuery query = CypherQuery.parse("RETURN p");
         final CypherSqlMapping mapping = new CypherSqlMapping(schema);
 
         final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> mapping.toSql(query));
@@ -83,7 +83,7 @@ class CypherSqlIntegrationTest {
     @Test
     void throwsForVariableLengthTraversalPlaceholder() {
         final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
-        final CypherQuery query = CypherQuery.parse("MATCH (c:Person)-[*0..3]->(t:Movie)");
+        final CypherQuery query = CypherQuery.parse("MATCH (c:Person)-[*0..3]->(t:Movie) RETURN c, t");
         final CypherSqlMapping mapping = new CypherSqlMapping(schema);
 
         final UnsupportedOperationException ex =
@@ -96,13 +96,55 @@ class CypherSqlIntegrationTest {
     @Test
     void throwsForMultiHopTraversalPlaceholder() {
         final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie)<-[:ACTED_IN]-(o:Person)");
+        final CypherQuery query =
+                CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie)<-[:ACTED_IN]-(o:Person) RETURN p, m, o");
         final CypherSqlMapping mapping = new CypherSqlMapping(schema);
 
         final UnsupportedOperationException ex =
                 assertThrows(UnsupportedOperationException.class, () -> mapping.toSql(query));
         assertEquals(
                 "Multi-hop traversals are not supported yet; traversal planning is a future enhancement.",
+                ex.getMessage());
+    }
+
+    @Test
+    void rendersReturnPropertiesOnly() {
+        final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
+        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id, m.id");
+        final CypherSqlMapping mapping = new CypherSqlMapping(schema);
+
+        final String sql = mapping.toSql(query).render(new BasicSqlDialect());
+
+        assertEquals(
+                "SELECT t0.id, t1.id FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+                sql
+        );
+    }
+
+    @Test
+    void rendersReturnVariablesOnly() {
+        final SchemaDefinition schema = SchemaDefinitionYaml.fromResource("schema.yaml");
+        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m");
+        final CypherSqlMapping mapping = new CypherSqlMapping(schema);
+
+        final String sql = mapping.toSql(query).render(new BasicSqlDialect());
+
+        assertEquals(
+                "SELECT t0.*, t1.* FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+                sql
+        );
+    }
+
+    @Test
+    void throwsForUnsupportedReturnExpression() {
+        final IllegalArgumentException ex = assertThrows(
+                IllegalArgumentException.class,
+                () -> CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN count(p)")
+        );
+        assertEquals(
+                "Unsupported RETURN expression: count(p). Only variable or variable.property are supported.",
                 ex.getMessage());
     }
 }

@@ -4,6 +4,7 @@ import com.iisaka.cypher2sql.query.cypher.CypherEdge;
 import com.iisaka.cypher2sql.query.cypher.CypherNode;
 import com.iisaka.cypher2sql.query.cypher.CypherPattern;
 import com.iisaka.cypher2sql.query.cypher.CypherQuery;
+import com.iisaka.cypher2sql.query.cypher.CypherReturnItem;
 import com.iisaka.cypher2sql.query.sql.SqlJoin;
 import com.iisaka.cypher2sql.query.sql.SqlSelect;
 import com.iisaka.cypher2sql.schema.EdgeMapping;
@@ -51,7 +52,8 @@ public final class CypherSqlMapping {
         final CypherNode root = nodes.get(0);
         final NodeMapping rootMapping = schema.nodeForLabel(root.label());
         final String rootAlias = nodeAliases.get(root.variable());
-        final SqlSelect select = SqlSelect.selectAllFrom(rootMapping.table(), rootAlias);
+        final SqlSelect select = SqlSelect.from(rootMapping.table(), rootAlias);
+        applyReturnProjection(select, query.returnItems(), rootAlias, nodeAliases);
 
         for (int i = 0; i < edges.size(); i++) {
             final CypherEdge edge = edges.get(i);
@@ -62,6 +64,28 @@ public final class CypherSqlMapping {
         }
 
         return select;
+    }
+
+    private void applyReturnProjection(
+            final SqlSelect select,
+            final List<CypherReturnItem> returnItems,
+            final String rootAlias,
+            final Map<String, String> nodeAliases) {
+        if (returnItems.isEmpty()) {
+            select.addSelectColumn(rootAlias + ".*");
+            return;
+        }
+        for (final CypherReturnItem item : returnItems) {
+            final String alias = nodeAliases.get(item.variable());
+            if (alias == null) {
+                throw new IllegalArgumentException("RETURN references unknown variable: " + item.variable());
+            }
+            if (item.property() == null) {
+                select.addSelectColumn(alias + ".*");
+            } else {
+                select.addSelectColumn(alias + "." + item.property());
+            }
+        }
     }
 
     private boolean containsVariableLengthTraversal(final String rawCypher) {

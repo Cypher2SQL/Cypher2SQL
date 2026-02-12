@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
-from .cypher_query import CypherQuery, CypherPattern, CypherNode
+from .cypher_query import CypherQuery, CypherPattern, CypherNode, CypherReturnItem
 from .schema import SchemaDefinition, EdgeMapping, RelationshipKind
 from .sql_query import JoinType, SqlJoin, SqlSelect
 
@@ -37,7 +37,8 @@ class CypherSqlMapping:
         root = nodes[0]
         root_mapping = self.schema.node_for_label(root.label)
         root_alias = node_aliases[root.variable]
-        select = SqlSelect.select_all_from(root_mapping.table, root_alias)
+        select = SqlSelect.select_from(root_mapping.table, root_alias)
+        self._apply_return_projection(select, query.return_items, root_alias, node_aliases)
 
         for idx, edge in enumerate(edges):
             left = nodes[idx]
@@ -122,3 +123,22 @@ class CypherSqlMapping:
         raise NotImplementedError(
             "Multi-hop traversals are not supported yet; traversal planning is a future enhancement."
         )
+
+    def _apply_return_projection(
+        self,
+        select: SqlSelect,
+        return_items: List[CypherReturnItem],
+        root_alias: str,
+        node_aliases: Dict[str, str],
+    ) -> None:
+        if not return_items:
+            select.add_select_column(f"{root_alias}.*")
+            return
+        for item in return_items:
+            alias = node_aliases.get(item.variable)
+            if alias is None:
+                raise ValueError(f"RETURN references unknown variable: {item.variable}")
+            if item.property is None:
+                select.add_select_column(f"{alias}.*")
+            else:
+                select.add_select_column(f"{alias}.{item.property}")

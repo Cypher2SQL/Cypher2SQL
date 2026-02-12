@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class CypherPatternExtractorTest {
     @Test
     void parsesRightToLeftEdgeDirection() {
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)<-[:ACTED_IN]-(m:Movie)");
+        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)<-[:ACTED_IN]-(m:Movie) RETURN p, m");
         final List<CypherPattern> patterns = query.patterns();
 
         assertEquals(1, patterns.size());
@@ -22,7 +22,7 @@ class CypherPatternExtractorTest {
 
     @Test
     void parsesUndirectedEdgeDirection() {
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]-(m:Movie)");
+        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]-(m:Movie) RETURN p, m");
         final List<CypherPattern> patterns = query.patterns();
 
         assertEquals(1, patterns.size());
@@ -33,7 +33,7 @@ class CypherPatternExtractorTest {
     void throwsWhenNodeVariableIsMissing() {
         final IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
-                () -> CypherQuery.parse("MATCH (:Person)-[:ACTED_IN]->(m:Movie)")
+                () -> CypherQuery.parse("MATCH (:Person)-[:ACTED_IN]->(m:Movie) RETURN m")
         );
         assertEquals("Node pattern missing variable: (:Person)", ex.getMessage());
     }

@@ -44,7 +44,8 @@ public final class CypherSyntax {
         return new CypherSyntax(lexer, parser, entryRules);
     }
 
-    public CypherParseResult parse(final String cypher) {
+    // Wrapper around ANTLR setup so parser wiring and entry-rule selection stay centralized.
+    public CypherParseTree parse(final String cypher) {
         final CharStream input = CharStreams.fromString(cypher);
         final Lexer lexer = instantiateLexer(input);
         final CommonTokenStream tokens = new CommonTokenStream(lexer);
@@ -52,7 +53,7 @@ public final class CypherSyntax {
         parser.removeErrorListeners();
         parser.addErrorListener(new CypherSyntaxErrorListener());
         final ParseTree parseTree = invokeEntryRule(parser);
-        return new CypherParseResult(parseTree, parser, tokens);
+        return new CypherParseTree(parseTree, parser);
     }
 
     public ParseTree parseTree(final String cypher) {

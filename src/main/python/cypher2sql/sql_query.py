@@ -42,12 +42,21 @@ class SqlSelect(SQLQuery):
     where_clauses: List[str] = field(default_factory=list)
 
     @classmethod
-    def select_all_from(cls, table: str, alias: str) -> "SqlSelect":
+    def select_from(cls, table: str, alias: str) -> "SqlSelect":
         select = cls()
-        select.select_columns.append(f"{alias}.*")
         select.from_table = table
         select.from_alias = alias
         return select
+
+    @classmethod
+    def select_all_from(cls, table: str, alias: str) -> "SqlSelect":
+        select = cls.select_from(table, alias)
+        select.select_columns.append(f"{alias}.*")
+        return select
+
+    def add_select_column(self, column: str) -> "SqlSelect":
+        self.select_columns.append(column)
+        return self
 
     def add_join(self, join: SqlJoin) -> "SqlSelect":
         self.joins.append(join)

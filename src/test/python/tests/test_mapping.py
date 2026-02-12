@@ -1,6 +1,6 @@
 import unittest
 
-from cypher2sql.cypher_query import CypherEdge, CypherNode, CypherPattern, CypherQuery, Direction
+from cypher2sql.cypher_query import CypherEdge, CypherNode, CypherPattern, CypherQuery, CypherReturnItem, Direction
 from cypher2sql.mapping import CypherSqlMapping
 from cypher2sql.schema import EdgeMapping, NodeMapping, SchemaDefinition
 from cypher2sql.sql_query import BasicSqlDialect
@@ -68,7 +68,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             CypherSqlMapping(self.schema).to_sql(query)
 
     def test_raises_for_variable_length_traversal_placeholder(self) -> None:
-        query = CypherQuery("MATCH (c:Person)-[*0..3]->(t:Movie)", [], parse_tree=object())
+        query = CypherQuery("MATCH (c:Person)-[*0..3]->(t:Movie) RETURN c, t", [], parse_tree=object())
         with self.assertRaisesRegex(
             NotImplementedError,
             "Variable-length traversals are not supported yet; recursive SQL translation is a future enhancement.",
@@ -83,11 +83,64 @@ class CypherSqlMappingTest(unittest.TestCase):
                 CypherEdge(variable=None, type="ACTED_IN", direction=Direction.RIGHT_TO_LEFT),
             ],
         )
-        query = CypherQuery("MATCH (p)-[:ACTED_IN]->(m)<-[:ACTED_IN]-(o)", [pattern], parse_tree=object())
+        query = CypherQuery("MATCH (p)-[:ACTED_IN]->(m)<-[:ACTED_IN]-(o) RETURN p, m, o", [pattern], parse_tree=object())
         with self.assertRaisesRegex(
             NotImplementedError,
             "Multi-hop traversals are not supported yet; traversal planning is a future enhancement.",
         ):
+            CypherSqlMapping(self.schema).to_sql(query)
+
+    def test_projects_return_properties(self) -> None:
+        query = CypherQuery(
+            "MATCH ... RETURN p.id, m.id",
+            [
+                CypherPattern(
+                    nodes=[CypherNode("p", "Person"), CypherNode("m", "Movie")],
+                    edges=[CypherEdge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[CypherReturnItem("p", "id"), CypherReturnItem("m", "id")],
+        )
+        sql = CypherSqlMapping(self.schema).to_sql(query).render(BasicSqlDialect())
+        self.assertEqual(
+            'SELECT t0.id, t1.id FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
+            'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
+            sql,
+        )
+
+    def test_projects_return_variables(self) -> None:
+        query = CypherQuery(
+            "MATCH ... RETURN p, m",
+            [
+                CypherPattern(
+                    nodes=[CypherNode("p", "Person"), CypherNode("m", "Movie")],
+                    edges=[CypherEdge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[CypherReturnItem("p"), CypherReturnItem("m")],
+        )
+        sql = CypherSqlMapping(self.schema).to_sql(query).render(BasicSqlDialect())
+        self.assertEqual(
+            'SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
+            'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
+            sql,
+        )
+
+    def test_raises_for_unknown_return_variable(self) -> None:
+        query = CypherQuery(
+            "MATCH ... RETURN x.id",
+            [
+                CypherPattern(
+                    nodes=[CypherNode("p", "Person"), CypherNode("m", "Movie")],
+                    edges=[CypherEdge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[CypherReturnItem("x", "id")],
+        )
+        with self.assertRaisesRegex(ValueError, "RETURN references unknown variable: x"):
             CypherSqlMapping(self.schema).to_sql(query)
 
 

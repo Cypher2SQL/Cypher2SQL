@@ -11,12 +11,22 @@ public final class SqlSelect implements SQLQuery<SqlDialect> {
     private final List<SqlJoin> joins = new ArrayList<>();
     private final List<String> whereClauses = new ArrayList<>();
 
-    public static SqlSelect selectAllFrom(final String table, final String alias) {
+    public static SqlSelect from(final String table, final String alias) {
         final SqlSelect select = new SqlSelect();
-        select.selectColumns.add(alias + ".*");
         select.fromTable = table;
         select.fromAlias = alias;
         return select;
+    }
+
+    public static SqlSelect selectAllFrom(final String table, final String alias) {
+        final SqlSelect select = from(table, alias);
+        select.selectColumns.add(alias + ".*");
+        return select;
+    }
+
+    public SqlSelect addSelectColumn(final String column) {
+        selectColumns.add(column);
+        return this;
     }
 
     public SqlSelect addJoin(final SqlJoin join) {

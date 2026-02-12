@@ -30,7 +30,7 @@ class IntegrationTest(unittest.TestCase):
 
         self.assertIsNotNone(query.parse_tree)
         self.assertEqual(
-            "SELECT t0.* FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "SELECT t0.*, t1.* FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
             "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
             sql,
         )
