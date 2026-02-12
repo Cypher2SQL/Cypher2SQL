@@ -1,8 +1,8 @@
 package com.iisaka;
 
-import com.iisaka.cypher2sql.query.sql.BasicSqlDialect;
-import com.iisaka.cypher2sql.query.cypher.CypherQuery;
-import com.iisaka.cypher2sql.schema.CypherSqlMapping;
+import com.iisaka.cypher2sql.query.sql.BasicDialect;
+import com.iisaka.cypher2sql.query.cypher.Query;
+import com.iisaka.cypher2sql.schema.Mapping;
 import com.iisaka.cypher2sql.schema.EdgeMapping;
 import com.iisaka.cypher2sql.schema.NodeMapping;
 import com.iisaka.cypher2sql.schema.SchemaDefinition;
@@ -20,10 +20,10 @@ public class Main {
                         "person_id",
                         "movie_id"));
 
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie)");
-        final CypherSqlMapping mapping = new CypherSqlMapping(schema);
+        final Query query = Query.parse("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie)");
+        final Mapping mapping = new Mapping(schema);
 
-        final String sql = mapping.toSql(query).render(new BasicSqlDialect());
+        final String sql = mapping.toSql(query).render(new BasicDialect());
         System.out.println(sql);
     }
 }

@@ -3,16 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
-from .cypher_query import CypherQuery, CypherPattern, CypherNode, CypherReturnItem
+from .cypher_query import Query, Pattern, Node, ReturnItem
 from .schema import SchemaDefinition, EdgeMapping, RelationshipKind
-from .sql_query import JoinType, SqlJoin, SqlSelect
+from .sql_query import JoinType, JoinClause, SelectQuery
 
 
 @dataclass
-class CypherSqlMapping:
+class Mapping:
     schema: SchemaDefinition
 
-    def to_sql(self, query: CypherQuery) -> SqlSelect:
+    def to_sql(self, query: Query) -> SelectQuery:
         if self._contains_variable_length_traversal(query.raw):
             return self._translate_variable_length_traversal(query)
 
@@ -20,7 +20,7 @@ class CypherSqlMapping:
         if not patterns:
             raise ValueError("No patterns parsed from Cypher query.")
 
-        pattern: CypherPattern = patterns[0]
+        pattern: Pattern = patterns[0]
         nodes = pattern.nodes
         edges = pattern.edges
         if len(edges) > 1:
@@ -37,7 +37,7 @@ class CypherSqlMapping:
         root = nodes[0]
         root_mapping = self.schema.node_for_label(root.label)
         root_alias = node_aliases[root.variable]
-        select = SqlSelect.select_from(root_mapping.table, root_alias)
+        select = SelectQuery.select_from(root_mapping.table, root_alias)
         self._apply_return_projection(select, query.return_items, root_alias, node_aliases)
 
         for idx, edge in enumerate(edges):
@@ -57,10 +57,10 @@ class CypherSqlMapping:
 
     def _apply_edge(
         self,
-        select: SqlSelect,
+        select: SelectQuery,
         edge_mapping: EdgeMapping,
-        left: CypherNode,
-        right: CypherNode,
+        left: Node,
+        right: Node,
         node_aliases: Dict[str, str],
         alias_counter: int,
     ) -> int:
@@ -75,17 +75,17 @@ class CypherSqlMapping:
             join_on_left = (
                 f"{left_alias}.{left_mapping.primary_key} = {join_alias}.{edge_mapping.from_join_key}"
             )
-            select.add_join(SqlJoin(JoinType.INNER, edge_mapping.join_table, join_alias, join_on_left))
+            select.add_join(JoinClause(JoinType.INNER, edge_mapping.join_table, join_alias, join_on_left))
 
             join_on_right = (
                 f"{join_alias}.{edge_mapping.to_join_key} = {right_alias}.{right_mapping.primary_key}"
             )
-            select.add_join(SqlJoin(JoinType.INNER, right_mapping.table, right_alias, join_on_right))
+            select.add_join(JoinClause(JoinType.INNER, right_mapping.table, right_alias, join_on_right))
             return alias_counter
 
         if edge_mapping.relationship_kind is RelationshipKind.SELF_REFERENTIAL:
             join_on_self = f"{left_alias}.{edge_mapping.from_key} = {right_alias}.{edge_mapping.to_key}"
-            select.add_join(SqlJoin(JoinType.INNER, left_mapping.table, right_alias, join_on_self))
+            select.add_join(JoinClause(JoinType.INNER, left_mapping.table, right_alias, join_on_self))
             return alias_counter
 
         if edge_mapping.relationship_kind is RelationshipKind.ONE_TO_MANY:
@@ -97,13 +97,13 @@ class CypherSqlMapping:
                 join_on = (
                     f"{right_alias}.{edge_mapping.child_foreign_key} = {left_alias}.{edge_mapping.parent_primary_key}"
                 )
-                select.add_join(SqlJoin(JoinType.INNER, right_mapping.table, right_alias, join_on))
+                select.add_join(JoinClause(JoinType.INNER, right_mapping.table, right_alias, join_on))
                 return alias_counter
             if right_is_parent:
                 join_on = (
                     f"{left_alias}.{edge_mapping.child_foreign_key} = {right_alias}.{edge_mapping.parent_primary_key}"
                 )
-                select.add_join(SqlJoin(JoinType.INNER, right_mapping.table, right_alias, join_on))
+                select.add_join(JoinClause(JoinType.INNER, right_mapping.table, right_alias, join_on))
                 return alias_counter
             raise ValueError(f"Edge mapping labels do not match nodes: {edge_mapping.type}")
 
@@ -112,13 +112,13 @@ class CypherSqlMapping:
     def _contains_variable_length_traversal(self, raw_cypher: str) -> bool:
         return "[*" in raw_cypher
 
-    def _translate_variable_length_traversal(self, query: CypherQuery) -> SqlSelect:
+    def _translate_variable_length_traversal(self, query: Query) -> SelectQuery:
         # Placeholder only: recursive traversal translation is intentionally not implemented yet.
         raise NotImplementedError(
             "Variable-length traversals are not supported yet; recursive SQL translation is a future enhancement."
         )
 
-    def _translate_multi_hop_traversal(self, query: CypherQuery) -> SqlSelect:
+    def _translate_multi_hop_traversal(self, query: Query) -> SelectQuery:
         # Placeholder only: multi-hop traversal planning is intentionally not implemented yet.
         raise NotImplementedError(
             "Multi-hop traversals are not supported yet; traversal planning is a future enhancement."
@@ -126,8 +126,8 @@ class CypherSqlMapping:
 
     def _apply_return_projection(
         self,
-        select: SqlSelect,
-        return_items: List[CypherReturnItem],
+        select: SelectQuery,
+        return_items: List[ReturnItem],
         root_alias: str,
         node_aliases: Dict[str, str],
     ) -> None:

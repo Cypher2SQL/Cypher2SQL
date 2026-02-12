@@ -1,8 +1,8 @@
 package com.iisaka.cypher2sql;
 
-import com.iisaka.cypher2sql.query.cypher.CypherEdge;
-import com.iisaka.cypher2sql.query.cypher.CypherPattern;
-import com.iisaka.cypher2sql.query.cypher.CypherQuery;
+import com.iisaka.cypher2sql.query.cypher.Edge;
+import com.iisaka.cypher2sql.query.cypher.Pattern;
+import com.iisaka.cypher2sql.query.cypher.Query;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -13,27 +13,27 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class CypherPatternExtractorTest {
     @Test
     void parsesRightToLeftEdgeDirection() {
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)<-[:ACTED_IN]-(m:Movie) RETURN p, m");
-        final List<CypherPattern> patterns = query.patterns();
+        final Query query = Query.parse("MATCH (p:Person)<-[:ACTED_IN]-(m:Movie) RETURN p, m");
+        final List<Pattern> patterns = query.patterns();
 
         assertEquals(1, patterns.size());
-        assertEquals(CypherEdge.Direction.RIGHT_TO_LEFT, patterns.get(0).edges().get(0).direction());
+        assertEquals(Edge.Direction.RIGHT_TO_LEFT, patterns.get(0).edges().get(0).direction());
     }
 
     @Test
     void parsesUndirectedEdgeDirection() {
-        final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]-(m:Movie) RETURN p, m");
-        final List<CypherPattern> patterns = query.patterns();
+        final Query query = Query.parse("MATCH (p:Person)-[:ACTED_IN]-(m:Movie) RETURN p, m");
+        final List<Pattern> patterns = query.patterns();
 
         assertEquals(1, patterns.size());
-        assertEquals(CypherEdge.Direction.UNDIRECTED, patterns.get(0).edges().get(0).direction());
+        assertEquals(Edge.Direction.UNDIRECTED, patterns.get(0).edges().get(0).direction());
     }
 
     @Test
     void throwsWhenNodeVariableIsMissing() {
         final IllegalArgumentException ex = assertThrows(
                 IllegalArgumentException.class,
-                () -> CypherQuery.parse("MATCH (:Person)-[:ACTED_IN]->(m:Movie) RETURN m")
+                () -> Query.parse("MATCH (:Person)-[:ACTED_IN]->(m:Movie) RETURN m")
         );
         assertEquals("Node pattern missing variable: (:Person)", ex.getMessage());
     }
