@@ -1,7 +1,5 @@
 package com.iisaka.cypher2sql.query.sql;
 
-import com.iisaka.cypher2sql.StorageModel;
-
-public interface SQLQuery<D extends StorageModel> {
+public interface SQLQuery<D extends SqlDialect> {
     String render(D dialect);
 }

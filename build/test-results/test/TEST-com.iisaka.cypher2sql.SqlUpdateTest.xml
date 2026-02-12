@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.iisaka.cypher2sql.SqlUpdateTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-02-11T21:13:17.960Z" hostname="Mac.hsd1.ca.comcast.net" time="0.001">
+<testsuite name="com.iisaka.cypher2sql.SqlUpdateTest" tests="1" skipped="0" failures="0" errors="0" timestamp="2026-02-12T18:18:20.508Z" hostname="decapod.local" time="0.0">
   <properties/>
-  <testcase name="throwsBecauseWriteQueriesAreDisabled()" classname="com.iisaka.cypher2sql.SqlUpdateTest" time="0.001"/>
+  <testcase name="throwsBecauseWriteQueriesAreDisabled()" classname="com.iisaka.cypher2sql.SqlUpdateTest" time="0.0"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>
