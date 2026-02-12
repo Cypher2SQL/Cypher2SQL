@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.iisaka.cypher2sql.SqlInsertTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-02-11T21:13:17.959Z" hostname="Mac.hsd1.ca.comcast.net" time="0.001">
+  <properties/>
+  <testcase name="throwsBecauseWriteQueriesAreDisabled()" classname="com.iisaka.cypher2sql.SqlInsertTest" time="0.0"/>
+  <testcase name="throwsBecausePlaceholderIsReadOnlyEvenWithoutValues()" classname="com.iisaka.cypher2sql.SqlInsertTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

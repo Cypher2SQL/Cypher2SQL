@@ -1,0 +1,124 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List
+
+from .cypher_query import CypherQuery, CypherPattern, CypherNode
+from .schema import SchemaDefinition, EdgeMapping, RelationshipKind
+from .sql_query import JoinType, SqlJoin, SqlSelect
+
+
+@dataclass
+class CypherSqlMapping:
+    schema: SchemaDefinition
+
+    def to_sql(self, query: CypherQuery) -> SqlSelect:
+        if self._contains_variable_length_traversal(query.raw):
+            return self._translate_variable_length_traversal(query)
+
+        patterns = query.patterns
+        if not patterns:
+            raise ValueError("No patterns parsed from Cypher query.")
+
+        pattern: CypherPattern = patterns[0]
+        nodes = pattern.nodes
+        edges = pattern.edges
+        if len(edges) > 1:
+            return self._translate_multi_hop_traversal(query)
+        if not nodes:
+            raise ValueError("Cypher pattern contains no nodes.")
+
+        node_aliases: Dict[str, str] = {}
+        alias_counter = 0
+        for node in nodes:
+            node_aliases[node.variable] = f"t{alias_counter}"
+            alias_counter += 1
+
+        root = nodes[0]
+        root_mapping = self.schema.node_for_label(root.label)
+        root_alias = node_aliases[root.variable]
+        select = SqlSelect.select_all_from(root_mapping.table, root_alias)
+
+        for idx, edge in enumerate(edges):
+            left = nodes[idx]
+            right = nodes[idx + 1]
+            edge_mapping = self.schema.edge_for_type(edge.type)
+            alias_counter = self._apply_edge(
+                select,
+                edge_mapping,
+                left,
+                right,
+                node_aliases,
+                alias_counter,
+            )
+
+        return select
+
+    def _apply_edge(
+        self,
+        select: SqlSelect,
+        edge_mapping: EdgeMapping,
+        left: CypherNode,
+        right: CypherNode,
+        node_aliases: Dict[str, str],
+        alias_counter: int,
+    ) -> int:
+        left_mapping = self.schema.node_for_label(left.label)
+        right_mapping = self.schema.node_for_label(right.label)
+        left_alias = node_aliases[left.variable]
+        right_alias = node_aliases[right.variable]
+
+        if edge_mapping.relationship_kind is RelationshipKind.JOIN_TABLE:
+            join_alias = f"j{alias_counter}"
+            alias_counter += 1
+            join_on_left = (
+                f"{left_alias}.{left_mapping.primary_key} = {join_alias}.{edge_mapping.from_join_key}"
+            )
+            select.add_join(SqlJoin(JoinType.INNER, edge_mapping.join_table, join_alias, join_on_left))
+
+            join_on_right = (
+                f"{join_alias}.{edge_mapping.to_join_key} = {right_alias}.{right_mapping.primary_key}"
+            )
+            select.add_join(SqlJoin(JoinType.INNER, right_mapping.table, right_alias, join_on_right))
+            return alias_counter
+
+        if edge_mapping.relationship_kind is RelationshipKind.SELF_REFERENTIAL:
+            join_on_self = f"{left_alias}.{edge_mapping.from_key} = {right_alias}.{edge_mapping.to_key}"
+            select.add_join(SqlJoin(JoinType.INNER, left_mapping.table, right_alias, join_on_self))
+            return alias_counter
+
+        if edge_mapping.relationship_kind is RelationshipKind.ONE_TO_MANY:
+            parent_label = edge_mapping.from_label
+            child_label = edge_mapping.to_label
+            left_is_parent = left.label == parent_label and right.label == child_label
+            right_is_parent = right.label == parent_label and left.label == child_label
+            if left_is_parent:
+                join_on = (
+                    f"{right_alias}.{edge_mapping.child_foreign_key} = {left_alias}.{edge_mapping.parent_primary_key}"
+                )
+                select.add_join(SqlJoin(JoinType.INNER, right_mapping.table, right_alias, join_on))
+                return alias_counter
+            if right_is_parent:
+                join_on = (
+                    f"{left_alias}.{edge_mapping.child_foreign_key} = {right_alias}.{edge_mapping.parent_primary_key}"
+                )
+                select.add_join(SqlJoin(JoinType.INNER, right_mapping.table, right_alias, join_on))
+                return alias_counter
+            raise ValueError(f"Edge mapping labels do not match nodes: {edge_mapping.type}")
+
+        raise ValueError(f"Unknown relationship kind: {edge_mapping.relationship_kind}")
+
+    def _contains_variable_length_traversal(self, raw_cypher: str) -> bool:
+        return "[*" in raw_cypher
+
+    def _translate_variable_length_traversal(self, query: CypherQuery) -> SqlSelect:
+        # Placeholder only: recursive traversal translation is intentionally not implemented yet.
+        raise NotImplementedError(
+            "Variable-length traversals are not supported yet; recursive SQL translation is a future enhancement."
+        )
+
+    def _translate_multi_hop_traversal(self, query: CypherQuery) -> SqlSelect:
+        # Placeholder only: multi-hop traversal planning is intentionally not implemented yet.
+        raise NotImplementedError(
+            "Multi-hop traversals are not supported yet; traversal planning is a future enhancement."
+        )

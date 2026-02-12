@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.iisaka.cypher2sql.CypherPatternExtractorTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-02-11T21:13:17.671Z" hostname="Mac.hsd1.ca.comcast.net" time="0.155">
+  <properties/>
+  <testcase name="throwsWhenNodeVariableIsMissing()" classname="com.iisaka.cypher2sql.CypherPatternExtractorTest" time="0.151"/>
+  <testcase name="parsesRightToLeftEdgeDirection()" classname="com.iisaka.cypher2sql.CypherPatternExtractorTest" time="0.002"/>
+  <testcase name="parsesUndirectedEdgeDirection()" classname="com.iisaka.cypher2sql.CypherPatternExtractorTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

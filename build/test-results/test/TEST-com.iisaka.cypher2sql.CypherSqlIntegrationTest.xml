@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.iisaka.cypher2sql.CypherSqlIntegrationTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-02-11T21:13:17.828Z" hostname="Mac.hsd1.ca.comcast.net" time="0.046">
+  <properties/>
+  <testcase name="throwsForVariableLengthTraversalPlaceholder()" classname="com.iisaka.cypher2sql.CypherSqlIntegrationTest" time="0.022"/>
+  <testcase name="rendersOneToManyJoinWhenParentIsLeftNode()" classname="com.iisaka.cypher2sql.CypherSqlIntegrationTest" time="0.009"/>
+  <testcase name="throwsForMultiHopTraversalPlaceholder()" classname="com.iisaka.cypher2sql.CypherSqlIntegrationTest" time="0.003"/>
+  <testcase name="rendersOneToManyJoinWhenParentIsRightNode()" classname="com.iisaka.cypher2sql.CypherSqlIntegrationTest" time="0.002"/>
+  <testcase name="rendersSelfReferentialJoin()" classname="com.iisaka.cypher2sql.CypherSqlIntegrationTest" time="0.002"/>
+  <testcase name="parsesCypherAndRendersSql()" classname="com.iisaka.cypher2sql.CypherSqlIntegrationTest" time="0.002"/>
+  <testcase name="throwsWhenPatternIsMissing()" classname="com.iisaka.cypher2sql.CypherSqlIntegrationTest" time="0.004"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
