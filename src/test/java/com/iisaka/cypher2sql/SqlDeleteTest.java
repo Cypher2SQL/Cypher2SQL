@@ -1,7 +1,7 @@
 package com.iisaka.cypher2sql;
 
-import com.iisaka.cypher2sql.query.sql.BasicSqlDialect;
-import com.iisaka.cypher2sql.query.sql.SqlDelete;
+import com.iisaka.cypher2sql.query.sql.BasicDialect;
+import com.iisaka.cypher2sql.query.sql.DeleteQuery;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -11,13 +11,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SqlDeleteTest {
     @Test
     void throwsBecauseWriteQueriesAreDisabled() {
-        final SqlDelete delete = SqlDelete.from("people").where("id = 1");
+        final DeleteQuery delete = DeleteQuery.from("people").where("id = 1");
 
         assertTrue(delete.hasWhereClause());
         final UnsupportedOperationException ex =
-                assertThrows(UnsupportedOperationException.class, () -> delete.render(new BasicSqlDialect()));
+                assertThrows(UnsupportedOperationException.class, () -> delete.render(new BasicDialect()));
         assertEquals(
-                "Write queries are disabled in read-only mode. SqlDelete is reserved for future enhancement.",
+                "Write queries are disabled in read-only mode. DeleteQuery is reserved for future enhancement.",
                 ex.getMessage());
     }
 }

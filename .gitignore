@@ -1,2 +1,5 @@
 /build/
 /built/
+.gradle/
+.idea/
+__pycache__/

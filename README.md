@@ -6,7 +6,7 @@ Translate simple Cypher graph patterns into SQL joins using a schema mapping.
 
 - Read-only query translation is supported (`MATCH`-style graph reads to SQL `SELECT`).
 - Write/update query generation is intentionally disabled for now.
-  `SqlInsert`/`SqlUpdate`/`SqlDelete` classes are placeholders reserved for future enhancements.
+  `InsertQuery`/`UpdateQuery`/`DeleteQuery` classes are placeholders reserved for future enhancements.
 
 ## Current Limitations
 
@@ -24,7 +24,7 @@ Translate simple Cypher graph patterns into SQL joins using a schema mapping.
   - `JOIN_TABLE`
   - `SELF_REFERENTIAL`
   - `ONE_TO_MANY`
-- Enforce read-only mode with write-query placeholders (`SqlInsert`, `SqlUpdate`, `SqlDelete`).
+- Enforce read-only mode with write-query placeholders (`InsertQuery`, `UpdateQuery`, `DeleteQuery`).
 
 ### Phase 2: Read Query Expansion
 
@@ -76,8 +76,8 @@ Legend:
 | `UNWIND` | Planned | Not translated yet |
 | `CREATE` | Placeholder | Write mode intentionally disabled |
 | `MERGE` | Placeholder | Write mode intentionally disabled |
-| `SET` / `REMOVE` | Placeholder | `SqlUpdate` exists as read-only placeholder |
-| `DELETE` / `DETACH DELETE` | Placeholder | `SqlDelete` exists as read-only placeholder |
+| `SET` / `REMOVE` | Placeholder | `UpdateQuery` exists as read-only placeholder |
+| `DELETE` / `DETACH DELETE` | Placeholder | `DeleteQuery` exists as read-only placeholder |
 
 ## Requirements
 
@@ -192,8 +192,8 @@ Run `com.iisaka.Main` from your IDE, or add the Gradle `application` plugin if y
 
 ```java
 final SchemaDefinition schema = SchemaDefinitionYaml.fromPath(Path.of("schema.yaml"));
-final CypherQuery query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie)");
-final String sql = new CypherSqlMapping(schema).toSql(query).render(new BasicSqlDialect());
+final Query query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie)");
+final String sql = new Mapping(schema).toSql(query).render(new BasicDialect());
 ```
 
 ## Python Usage
@@ -218,14 +218,14 @@ PYTHONPATH=src/main/python .venv/bin/python -m unittest discover -s src/test/pyt
 Note: the Python ANTLR parser expects a complete query form (for example, include `RETURN`).
 
 ```python
-from cypher2sql.cypher_query import CypherQuery
-from cypher2sql.mapping import CypherSqlMapping
+from cypher2sql.cypher_query import Query
+from cypher2sql.mapping import Mapping
 from cypher2sql.schema import SchemaDefinition
-from cypher2sql.sql_query import BasicSqlDialect
+from cypher2sql.sql_query import BasicDialect
 
 schema = SchemaDefinition.from_yaml_path("schema.yaml")
-query = CypherQuery.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m")
-sql = CypherSqlMapping(schema).to_sql(query).render(BasicSqlDialect())
+query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m")
+sql = Mapping(schema).to_sql(query).render(BasicDialect())
 print(sql)
 ```
 
