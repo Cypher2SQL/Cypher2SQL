@@ -6,6 +6,7 @@ import com.iisaka.cypher2sql.query.cypher.Pattern;
 import com.iisaka.cypher2sql.query.cypher.Query;
 import com.iisaka.cypher2sql.query.sql.SelectQuery;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,24 +25,22 @@ public final class Mapping {
         }
 
         final Pattern pattern = patterns.get(0);
-        final List<Node> nodes = pattern.nodes();
         final List<Edge> edges = pattern.edges();
-        new TranslationCapabilities(query.raw(), edges.size()).ensureSupported();
+        new TranslationCapabilities(query.raw()).ensureSupported();
+        final List<Node> nodes = resolveNodeLabels(pattern);
         if (nodes.isEmpty()) {
             throw new IllegalArgumentException("Cypher pattern contains no nodes.");
         }
 
-        final Map<String, String> nodeAliases = assignNodeAliases(nodes);
-        final AliasState aliases = new AliasState(nodeAliases.size());
+        final AliasState aliases = new AliasState(nodes.size());
 
         final Node root = nodes.get(0);
         final NodeMapping rootMapping = schema.nodeForLabel(root.label());
-        final String rootAlias = nodeAliases.get(root.variable());
-        final SelectQuery select = SelectQuery.from(rootMapping.table(), rootAlias);
-        new Projection(query.returnItems(), rootAlias, nodeAliases).applyTo(select);
+        final SelectQuery select = SelectQuery.from(rootMapping.table(), pattern.rootAlias());
+        final Map<String, EdgeProjection> edgeProjections = new HashMap<>();
 
         for (int i = 0; i < edges.size(); i++) {
-            final Edge edge = edges.get(i);
+            final Edge edge = pattern.edgeAt(i);
             final Node left = nodes.get(i);
             final Node right = nodes.get(i + 1);
             final EdgeMapping edgeMapping = schema.edgeForType(edge.type());
@@ -49,19 +48,53 @@ public final class Mapping {
                     edgeMapping,
                     left,
                     right,
-                    nodeAliases.get(left.variable()),
-                    nodeAliases.get(right.variable()));
-            relation.applyTo(select, schema, aliases);
+                    pattern.aliasAt(i),
+                    pattern.aliasAt(i + 1));
+            final EdgeProjection projection = relation.applyTo(select, schema, aliases);
+            if (edge.variable() != null && !edge.variable().isBlank()) {
+                edgeProjections.put(edge.variable(), projection);
+            }
         }
+        new Projection(pattern, query.returnItems(), edgeProjections).applyTo(select);
 
         return select;
     }
 
-    private Map<String, String> assignNodeAliases(final List<Node> nodes) {
-        final Map<String, String> nodeAliases = new HashMap<>();
-        for (int i = 0; i < nodes.size(); i++) {
-            nodeAliases.put(nodes.get(i).variable(), "t" + i);
+    private List<Node> resolveNodeLabels(final Pattern pattern) {
+        final List<Node> resolved = new ArrayList<>();
+        final List<Edge> edges = pattern.edges();
+        final List<EdgeMapping> edgeMappings = new ArrayList<>();
+        for (final Edge edge : edges) {
+            edgeMappings.add(schema.edgeForType(edge.type()));
         }
-        return nodeAliases;
+        for (int i = 0; i < pattern.nodes().size(); i++) {
+            final Node node = pattern.nodeAt(i);
+            if (node.label() != null && !node.label().isBlank()) {
+                resolved.add(node);
+                continue;
+            }
+            String inferredLabel = null;
+            if (i > 0) {
+                inferredLabel = mergeLabel(inferredLabel, edgeMappings.get(i - 1).toLabel(), i);
+            }
+            if (i < edgeMappings.size()) {
+                inferredLabel = mergeLabel(inferredLabel, edgeMappings.get(i).fromLabel(), i);
+            }
+            resolved.add(new Node(node.variable(), inferredLabel));
+        }
+        return resolved;
+    }
+
+    private String mergeLabel(final String current, final String candidate, final int nodeIndex) {
+        if (candidate == null || candidate.isBlank()) {
+            return current;
+        }
+        if (current == null) {
+            return candidate;
+        }
+        if (!current.equals(candidate)) {
+            throw new IllegalArgumentException("Unable to infer unique label for anonymous node at index " + nodeIndex);
+        }
+        return current;
     }
 }

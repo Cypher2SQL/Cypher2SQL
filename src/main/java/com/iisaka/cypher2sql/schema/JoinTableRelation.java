@@ -25,7 +25,7 @@ final class JoinTableRelation implements Relation {
     }
 
     @Override
-    public void applyTo(final SelectQuery select, final SchemaDefinition schema, final AliasState aliases) {
+    public EdgeProjection applyTo(final SelectQuery select, final SchemaDefinition schema, final AliasState aliases) {
         final NodeMapping leftMapping = schema.nodeForLabel(left.label());
         final NodeMapping rightMapping = schema.nodeForLabel(right.label());
         final String joinAlias = aliases.nextJoinAlias();
@@ -37,5 +37,6 @@ final class JoinTableRelation implements Relation {
         final String joinOnRight = joinAlias + "." + edgeMapping.toJoinKey()
                 + " = " + rightAlias + "." + rightMapping.primaryKey();
         select.addJoin(new JoinClause(JoinClause.JoinType.INNER, rightMapping.table(), rightAlias, joinOnRight));
+        return new EdgeProjection(java.util.List.of(joinAlias + ".*"));
     }
 }

@@ -42,6 +42,71 @@ class CypherSqlMappingTest(unittest.TestCase):
             sql,
         )
 
+    def test_renders_single_node_match(self) -> None:
+        query = Query(
+            "MATCH (p:Person) RETURN p",
+            [Pattern(nodes=[Node("p", "Person")], edges=[])],
+            parse_tree=object(),
+            return_items=[ReturnItem("p")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        self.assertEqual('SELECT t0.* FROM "people" t0', sql)
+
+    def test_renders_join_table_rows_when_returning_edge_variable(self) -> None:
+        query = Query(
+            "MATCH ()-[r:ACTED_IN]->() RETURN r",
+            [
+                Pattern(
+                    nodes=[Node(None, "Person"), Node(None, "Movie")],
+                    edges=[Edge(variable="r", type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("r")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        self.assertEqual(
+            'SELECT j2.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
+            'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
+            sql,
+        )
+
+    def test_renders_foreign_key_columns_when_returning_edge_variable(self) -> None:
+        query = Query(
+            "MATCH (p:Person)-[r:AUTHORED]->(m:Movie) RETURN r",
+            [
+                Pattern(
+                    nodes=[Node("p", "Person"), Node("m", "Movie")],
+                    edges=[Edge(variable="r", type="AUTHORED", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("r")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        self.assertEqual(
+            'SELECT t1.author_id, t0.id FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id',
+            sql,
+        )
+
+    def test_renders_self_referential_columns_when_returning_edge_variable(self) -> None:
+        query = Query(
+            "MATCH ()-[r:MANAGES]->() RETURN r",
+            [
+                Pattern(
+                    nodes=[Node(None, "Person"), Node(None, "Person")],
+                    edges=[Edge(variable="r", type="MANAGES", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("r")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        self.assertEqual(
+            'SELECT t0.manager_id, t1.id FROM "people" t0 INNER JOIN "people" t1 ON t0.manager_id = t1.id',
+            sql,
+        )
+
     def test_renders_self_referential(self) -> None:
         query = self._query("p", "Person", "MANAGES", "m", "Person")
         sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
@@ -75,20 +140,26 @@ class CypherSqlMappingTest(unittest.TestCase):
         ):
             Mapping(self.schema).to_sql(query)
 
-    def test_raises_for_multi_hop_traversal_placeholder(self) -> None:
+    def test_renders_explicit_multi_hop_traversal(self) -> None:
         pattern = Pattern(
             nodes=[Node("p", "Person"), Node("m", "Movie"), Node("o", "Person")],
             edges=[
-                Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT),
-                Edge(variable=None, type="ACTED_IN", direction=Direction.RIGHT_TO_LEFT),
+                Edge(variable=None, type="AUTHORED", direction=Direction.LEFT_TO_RIGHT),
+                Edge(variable=None, type="AUTHORED", direction=Direction.LEFT_TO_RIGHT),
             ],
         )
-        query = Query("MATCH (p)-[:ACTED_IN]->(m)<-[:ACTED_IN]-(o) RETURN p, m, o", [pattern], parse_tree=object())
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "Multi-hop traversals are not supported yet; traversal planning is a future enhancement.",
-        ):
-            Mapping(self.schema).to_sql(query)
+        query = Query(
+            "MATCH (p)-[:AUTHORED]->(m)-[:AUTHORED]->(o) RETURN p, m, o",
+            [pattern],
+            parse_tree=object(),
+            return_items=[ReturnItem("p"), ReturnItem("m"), ReturnItem("o")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        self.assertEqual(
+            'SELECT t0.*, t1.*, t2.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id '
+            'INNER JOIN "people" t2 ON t1.author_id = t2.id',
+            sql,
+        )
 
     def test_projects_return_properties(self) -> None:
         query = Query(

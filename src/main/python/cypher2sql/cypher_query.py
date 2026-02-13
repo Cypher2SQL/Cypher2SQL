@@ -224,7 +224,7 @@ def _is_identifier(value: str) -> bool:
 def _parse_node_text(text: str) -> Node:
     open_idx = text.find("(")
     close_idx = text.rfind(")")
-    if open_idx < 0 or close_idx <= open_idx + 1:
+    if open_idx < 0 or close_idx < open_idx:
         raise ValueError(f"Unsupported node pattern: {text}")
 
     inside = text[open_idx + 1 : close_idx]
@@ -236,16 +236,16 @@ def _parse_node_text(text: str) -> Node:
         inside = inside[:where_at]
     inside = inside.strip()
 
+    if not inside:
+        return Node(variable=None, label=None)
+
     if inside.startswith(":"):
-        raise ValueError(f"Node pattern missing variable: {text}")
+        return Node(variable=None, label=_first_token(inside[1:], "&:{ \t\n\r"))
 
     colon = inside.find(":")
     variable = (inside[:colon] if colon >= 0 else inside).strip()
-    if not variable:
-        raise ValueError(f"Node pattern missing variable: {text}")
-
     label = _first_token(inside[colon + 1 :], "&:{ \t\n\r") if colon >= 0 else None
-    return Node(variable=variable, label=label)
+    return Node(variable=_empty_to_none(variable), label=label)
 
 
 def _parse_edge_text(text: str) -> Edge:

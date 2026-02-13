@@ -23,10 +23,13 @@ final class SelfRelation implements Relation {
     }
 
     @Override
-    public void applyTo(final SelectQuery select, final SchemaDefinition schema, final AliasState aliases) {
+    public EdgeProjection applyTo(final SelectQuery select, final SchemaDefinition schema, final AliasState aliases) {
         final NodeMapping leftMapping = schema.nodeForLabel(left.label());
         final String joinOnSelf = leftAlias + "." + edgeMapping.fromKey()
                 + " = " + rightAlias + "." + edgeMapping.toKey();
         select.addJoin(new JoinClause(JoinClause.JoinType.INNER, leftMapping.table(), rightAlias, joinOnSelf));
+        return new EdgeProjection(java.util.List.of(
+                leftAlias + "." + edgeMapping.fromKey(),
+                rightAlias + "." + edgeMapping.toKey()));
     }
 }

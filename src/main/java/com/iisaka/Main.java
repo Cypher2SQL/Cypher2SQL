@@ -20,7 +20,7 @@ public class Main {
                         "person_id",
                         "movie_id"));
 
-        final Query query = Query.parse("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie)");
+        final Query query = Query.of("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie)");
         final Mapping mapping = new Mapping(schema);
 
         final String sql = mapping.toSql(query).render(new BasicDialect());

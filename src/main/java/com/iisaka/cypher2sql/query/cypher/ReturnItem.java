@@ -1,61 +1,7 @@
 package com.iisaka.cypher2sql.query.cypher;
 
-import org.antlr.v4.runtime.ParserRuleContext;
-import org.antlr.v4.runtime.tree.ParseTree;
-import org.antlr.v4.runtime.tree.TerminalNode;
-
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
-import java.util.List;
-
 public record ReturnItem(String variable, String property) {
-    // Reads RETURN/projection items from the parse tree and normalizes to variable/property form.
-    public static List<ReturnItem> extract(final String[] ruleNames, final ParseTree parseTree) {
-        final List<ParserRuleContext> returnItemContexts = new ArrayList<>();
-        final Deque<ParseTree> stack = new ArrayDeque<>();
-        stack.push(parseTree);
-        while (!stack.isEmpty()) {
-            final ParseTree current = stack.pop();
-            if (current instanceof ParserRuleContext context) {
-                final String ruleName = ruleNames[context.getRuleIndex()];
-                if (isReturnItemRule(ruleName)) {
-                    returnItemContexts.add(context);
-                }
-            }
-            for (int i = current.getChildCount() - 1; i >= 0; i--) {
-                stack.push(current.getChild(i));
-            }
-        }
-
-        final List<ReturnItem> items = new ArrayList<>();
-        for (final ParserRuleContext context : returnItemContexts) {
-            final String expr = returnExpressionText(context);
-            items.add(parseProjectionExpression(expr));
-        }
-        return items;
-    }
-
-    private static String returnExpressionText(final ParserRuleContext context) {
-        final StringBuilder beforeAlias = new StringBuilder();
-        boolean sawAs = false;
-        for (int i = 0; i < context.getChildCount(); i++) {
-            final ParseTree child = context.getChild(i);
-            if (child instanceof TerminalNode terminal && "AS".equalsIgnoreCase(terminal.getText())) {
-                sawAs = true;
-                break;
-            }
-            beforeAlias.append(child.getText());
-        }
-        return (sawAs ? beforeAlias.toString() : context.getText()).trim();
-    }
-
-    private static boolean isReturnItemRule(final String ruleName) {
-        final String normalized = ruleName.replaceAll("[^A-Za-z0-9]", "").toLowerCase();
-        return normalized.endsWith("returnitem") || normalized.endsWith("projectionitem");
-    }
-
-    private static ReturnItem parseProjectionExpression(final String expr) {
+    static ReturnItem fromProjectionExpression(final String expr) {
         final int dot = expr.indexOf('.');
         if (dot < 0) {
             if (isIdentifier(expr)) {

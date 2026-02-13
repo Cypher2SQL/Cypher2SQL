@@ -4,7 +4,7 @@ import com.iisaka.cypher2sql.query.cypher.Node;
 import com.iisaka.cypher2sql.query.sql.SelectQuery;
 
 sealed interface Relation permits JoinTableRelation, SelfRelation, OneToManyRelation {
-    void applyTo(SelectQuery select, SchemaDefinition schema, AliasState aliases);
+    EdgeProjection applyTo(SelectQuery select, SchemaDefinition schema, AliasState aliases);
 
     static Relation from(
             final EdgeMapping edgeMapping,

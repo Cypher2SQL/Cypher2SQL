@@ -25,7 +25,7 @@ final class OneToManyRelation implements Relation {
     }
 
     @Override
-    public void applyTo(final SelectQuery select, final SchemaDefinition schema, final AliasState aliases) {
+    public EdgeProjection applyTo(final SelectQuery select, final SchemaDefinition schema, final AliasState aliases) {
         final NodeMapping rightMapping = schema.nodeForLabel(right.label());
         final String parentLabel = edgeMapping.fromLabel();
         final String childLabel = edgeMapping.toLabel();
@@ -35,13 +35,17 @@ final class OneToManyRelation implements Relation {
             final String joinOn = rightAlias + "." + edgeMapping.childForeignKey()
                     + " = " + leftAlias + "." + edgeMapping.parentPrimaryKey();
             select.addJoin(new JoinClause(JoinClause.JoinType.INNER, rightMapping.table(), rightAlias, joinOn));
-            return;
+            return new EdgeProjection(java.util.List.of(
+                    rightAlias + "." + edgeMapping.childForeignKey(),
+                    leftAlias + "." + edgeMapping.parentPrimaryKey()));
         }
         if (rightIsParent) {
             final String joinOn = leftAlias + "." + edgeMapping.childForeignKey()
                     + " = " + rightAlias + "." + edgeMapping.parentPrimaryKey();
             select.addJoin(new JoinClause(JoinClause.JoinType.INNER, rightMapping.table(), rightAlias, joinOn));
-            return;
+            return new EdgeProjection(java.util.List.of(
+                    leftAlias + "." + edgeMapping.childForeignKey(),
+                    rightAlias + "." + edgeMapping.parentPrimaryKey()));
         }
         throw new IllegalArgumentException("Edge mapping labels do not match nodes: " + edgeMapping.type());
     }
