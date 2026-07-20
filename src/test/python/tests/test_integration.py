@@ -1,11 +1,16 @@
 import unittest
 
+from cypher2sql import cypher_query
 from cypher2sql.cypher_query import Direction, Query, _parse
 from cypher2sql.mapping import Mapping
 from cypher2sql.schema import SchemaDefinition
 from cypher2sql.sql_query import BasicDialect
 
 class IntegrationTest(unittest.TestCase):
+    def setUp(self) -> None:
+        if cypher_query.InputStream is None:
+            self.skipTest("ANTLR runtime not available. Install antlr4-python3-runtime and antlr4-cypher.")
+
     def test_parse_and_render(self) -> None:
         raw = """
         nodes:

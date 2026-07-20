@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## v0.1.0 - Phase 1 Complete
+## v0.1.0 - Phase 1 Complete (February 13, 2026)
 
 ### Added
 - Read-only Cypher `MATCH` to SQL `SELECT`/`JOIN` translation foundation.

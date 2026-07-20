@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, List
+from typing import Any
 
 try:
     from antlr4 import InputStream, CommonTokenStream
@@ -40,8 +40,8 @@ class Edge:
 
 @dataclass(frozen=True)
 class Pattern:
-    nodes: List[Node]
-    edges: List[Edge]
+    nodes: list[Node]
+    edges: list[Edge]
 
 
 @dataclass(frozen=True)
@@ -54,21 +54,25 @@ class Query:
     def __init__(
         self,
         raw: str,
-        patterns: List[Pattern],
+        patterns: list[Pattern],
         parse_tree: Any,
-        return_items: List[ReturnItem] | None = None,
+        return_items: list[ReturnItem] | None = None,
+        has_variable_length_traversal: bool | None = None,
     ) -> None:
         self._raw = raw
         self._patterns = list(patterns)
         self._parse_tree = parse_tree
         self._return_items = [] if return_items is None else list(return_items)
+        self._has_variable_length_traversal = (
+            ("[*" in raw) if has_variable_length_traversal is None else has_variable_length_traversal
+        )
 
     @property
     def raw(self) -> str:
         return self._raw
 
     @property
-    def patterns(self) -> List[Pattern]:
+    def patterns(self) -> list[Pattern]:
         return list(self._patterns)
 
     @property
@@ -76,14 +80,24 @@ class Query:
         return self._parse_tree
 
     @property
-    def return_items(self) -> List[ReturnItem]:
+    def return_items(self) -> list[ReturnItem]:
         return list(self._return_items)
+
+    @property
+    def has_variable_length_traversal(self) -> bool:
+        return self._has_variable_length_traversal
 
     @classmethod
     def parse(cls, cypher: str) -> "Query":
         parse_tree, parser = _parse(cypher)
         patterns = _extract_patterns(parser, parse_tree)
-        return cls(cypher, patterns, parse_tree, _extract_return_items(parser, parse_tree))
+        return cls(
+            cypher,
+            patterns,
+            parse_tree,
+            _extract_return_items(parser, parse_tree),
+            _has_variable_length_traversal(parser, parse_tree),
+        )
 
 
 class _CypherSyntaxErrorListener(ErrorListener):
@@ -103,16 +117,16 @@ def _parse(cypher: str) -> tuple[Any, Any]:
     parser.removeErrorListeners()
     parser.addErrorListener(_CypherSyntaxErrorListener())
 
-    for rule in ("oC_Cypher", "cypher", "statement", "query"):
+    for rule in ("statement", "query", "cypher", "oC_Cypher"):
         rule_fn = getattr(parser, rule, None)
         if rule_fn is not None:
             return rule_fn(), parser
     raise RuntimeError("No supported Cypher entry rule found on parser.")
 
 
-def _extract_return_items(parser: Any, parse_tree: Any) -> List[ReturnItem]:
-    return_items = []
-    stack: List[Any] = [parse_tree]
+def _extract_return_items(parser: Any, parse_tree: Any) -> list[ReturnItem]:
+    return_items: list[ReturnItem] = []
+    stack: list[Any] = [parse_tree]
     while stack:
         current = stack.pop()
         rule_name = _rule_name(parser, current)
@@ -125,44 +139,47 @@ def _extract_return_items(parser: Any, parse_tree: Any) -> List[ReturnItem]:
     return return_items
 
 
-def _extract_patterns(parser: Any, parse_tree: Any) -> List[Pattern]:
-    pattern_root = _find_first_pattern_element(parser, parse_tree)
-    if pattern_root is None:
+def _extract_patterns(parser: Any, parse_tree: Any) -> list[Pattern]:
+    roots = _find_pattern_elements(parser, parse_tree)
+    if not roots:
         return []
 
-    node_contexts: List[Any] = []
-    relationship_contexts: List[Any] = []
-    stack: List[Any] = [pattern_root]
+    patterns: list[Pattern] = []
+    for root in roots:
+        node_contexts: list[Any] = []
+        relationship_contexts: list[Any] = []
+        stack: list[Any] = [root]
+        while stack:
+            current = stack.pop()
+            rule_name = _rule_name(parser, current)
+            if rule_name == "nodePattern":
+                node_contexts.append(current)
+            elif rule_name == "relationshipPattern":
+                relationship_contexts.append(current)
+            child_count = getattr(current, "getChildCount", lambda: 0)()
+            for idx in range(child_count - 1, -1, -1):
+                stack.append(current.getChild(idx))
+        if not node_contexts:
+            continue
+
+        nodes = [_parse_node_text(ctx.getText()) for ctx in node_contexts]
+        edges = [_parse_edge_text(ctx.getText()) for ctx in relationship_contexts]
+        patterns.append(Pattern(nodes=nodes, edges=edges))
+    return patterns
+
+
+def _find_pattern_elements(parser: Any, parse_tree: Any) -> list[Any]:
+    roots: list[Any] = []
+    stack: list[Any] = [parse_tree]
     while stack:
         current = stack.pop()
         rule_name = _rule_name(parser, current)
-        if rule_name == "nodePattern":
-            node_contexts.append(current)
-        elif rule_name == "relationshipPattern":
-            relationship_contexts.append(current)
+        if rule_name == "patternElement":
+            roots.append(current)
         child_count = getattr(current, "getChildCount", lambda: 0)()
         for idx in range(child_count - 1, -1, -1):
             stack.append(current.getChild(idx))
-
-    if not node_contexts:
-        return []
-
-    nodes = [_parse_node_text(ctx.getText()) for ctx in node_contexts]
-    edges = [_parse_edge_text(ctx.getText()) for ctx in relationship_contexts]
-    return [Pattern(nodes=nodes, edges=edges)]
-
-
-def _find_first_pattern_element(parser: Any, parse_tree: Any) -> Any | None:
-    stack: List[Any] = [parse_tree]
-    while stack:
-        current = stack.pop()
-        rule_name = _rule_name(parser, current)
-        if rule_name in {"patternElement", "patternPart"}:
-            return current
-        child_count = getattr(current, "getChildCount", lambda: 0)()
-        for idx in range(child_count - 1, -1, -1):
-            stack.append(current.getChild(idx))
-    return None
+    return roots
 
 
 def _rule_name(parser: Any, context: Any) -> str | None:
@@ -178,7 +195,7 @@ def _is_return_item_rule(rule_name: str) -> bool:
 
 
 def _return_expression_text(context: Any) -> str:
-    before_alias: List[str] = []
+    before_alias: list[str] = []
     saw_as = False
     for i in range(context.getChildCount()):
         child = context.getChild(i)
@@ -231,9 +248,6 @@ def _parse_node_text(text: str) -> Node:
     properties_at = inside.find("{")
     if properties_at >= 0:
         inside = inside[:properties_at]
-    where_at = inside.upper().find("WHERE")
-    if where_at >= 0:
-        inside = inside[:where_at]
     inside = inside.strip()
 
     if not inside:
@@ -292,3 +306,16 @@ def _empty_to_none(value: str | None) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _has_variable_length_traversal(parser: Any, parse_tree: Any) -> bool:
+    stack: list[Any] = [parse_tree]
+    while stack:
+        current = stack.pop()
+        rule_name = _rule_name(parser, current)
+        if rule_name == "relationshipPattern" and "*" in current.getText():
+            return True
+        child_count = getattr(current, "getChildCount", lambda: 0)()
+        for idx in range(child_count - 1, -1, -1):
+            stack.append(current.getChild(idx))
+    return False

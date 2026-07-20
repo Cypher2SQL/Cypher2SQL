@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Any
 
-from .cypher_query import Query, Pattern, Node, ReturnItem
+from .cypher_query import Direction, Query, Pattern, Node, ReturnItem
 from .schema import SchemaDefinition, EdgeMapping, RelationshipKind
 from .sql_query import JoinType, JoinClause, SelectQuery
 
@@ -13,12 +13,14 @@ class Mapping:
     schema: SchemaDefinition
 
     def to_sql(self, query: Query) -> SelectQuery:
-        if self._contains_variable_length_traversal(query.raw):
+        if query.has_variable_length_traversal:
             return self._translate_variable_length_traversal(query)
 
         patterns = query.patterns
         if not patterns:
             raise ValueError("No patterns parsed from Cypher query.")
+        if len(patterns) > 1:
+            raise NotImplementedError(f"Multiple top-level MATCH patterns are not supported yet. Found: {len(patterns)}")
 
         pattern: Pattern = patterns[0]
         nodes = self._resolve_node_labels(pattern)
@@ -33,17 +35,15 @@ class Mapping:
         root_mapping = self.schema.node_for_label(root.label)
         root_alias = aliases_by_index[0]
         select = SelectQuery.select_from(root_mapping.table, root_alias)
-        edge_projections: Dict[str, List[str]] = {}
+        edge_projections: dict[str, list[str]] = {}
 
         for idx, edge in enumerate(edges):
-            left = nodes[idx]
-            right = nodes[idx + 1]
-            edge_mapping = self.schema.edge_for_type(edge.type)
+            edge_mapping = self._resolve_relation(edge, nodes[idx], nodes[idx + 1])
             alias_counter, edge_columns = self._apply_edge(
                 select,
                 edge_mapping,
-                left,
-                right,
+                nodes[idx],
+                nodes[idx + 1],
                 aliases_by_index[idx],
                 aliases_by_index[idx + 1],
                 alias_counter,
@@ -64,7 +64,7 @@ class Mapping:
         left_alias: str,
         right_alias: str,
         alias_counter: int,
-    ) -> Tuple[int, List[str]]:
+    ) -> tuple[int, list[str]]:
         left_mapping = self.schema.node_for_label(left.label)
         right_mapping = self.schema.node_for_label(right.label)
 
@@ -117,9 +117,6 @@ class Mapping:
 
         raise ValueError(f"Unknown relationship kind: {edge_mapping.relationship_kind}")
 
-    def _contains_variable_length_traversal(self, raw_cypher: str) -> bool:
-        return "[*" in raw_cypher
-
     def _translate_variable_length_traversal(self, query: Query) -> SelectQuery:
         # Placeholder only: recursive traversal translation is intentionally not implemented yet.
         raise NotImplementedError(
@@ -129,10 +126,10 @@ class Mapping:
     def _apply_return_projection(
         self,
         select: SelectQuery,
-        return_items: List[ReturnItem],
+        return_items: list[ReturnItem],
         root_alias: str,
-        node_aliases: Dict[str, str],
-        edge_projections: Dict[str, List[str]],
+        node_aliases: dict[str, str],
+        edge_projections: dict[str, list[str]],
     ) -> None:
         if not return_items:
             select.add_select_column(f"{root_alias}.*")
@@ -156,21 +153,41 @@ class Mapping:
 
             raise ValueError(f"RETURN references unknown variable: {item.variable}")
 
-    def _resolve_node_labels(self, pattern: Pattern) -> List[Node]:
-        resolved: List[Node] = []
+    def _resolve_node_labels(self, pattern: Pattern) -> list[Node]:
+        resolved: list[Node] = []
         edges = pattern.edges
-        edge_mappings = [self.schema.edge_for_type(edge.type) for edge in edges]
+        edge_mappings = [
+            self._resolve_edge_mapping_for_inference(edge, pattern.nodes[idx], pattern.nodes[idx + 1])
+            for idx, edge in enumerate(edges)
+        ]
         for idx, node in enumerate(pattern.nodes):
             if node.label:
                 resolved.append(node)
                 continue
             inferred = None
             if idx > 0:
-                inferred = self._merge_label(inferred, edge_mappings[idx - 1].to_label, idx)
+                prev_edge = edges[idx - 1]
+                prev_mapping = edge_mappings[idx - 1]
+                prev_candidate = prev_mapping.from_label if prev_edge.direction is Direction.RIGHT_TO_LEFT else prev_mapping.to_label
+                inferred = self._merge_label(inferred, prev_candidate, idx)
             if idx < len(edge_mappings):
-                inferred = self._merge_label(inferred, edge_mappings[idx].from_label, idx)
+                next_edge = edges[idx]
+                next_mapping = edge_mappings[idx]
+                next_candidate = next_mapping.to_label if next_edge.direction is Direction.RIGHT_TO_LEFT else next_mapping.from_label
+                inferred = self._merge_label(inferred, next_candidate, idx)
             resolved.append(Node(variable=node.variable, label=inferred))
         return resolved
+
+    def _resolve_edge_mapping_for_inference(self, edge: Edge, left: Node, right: Node) -> EdgeMapping:
+        has_left = bool(left.label)
+        has_right = bool(right.label)
+        if not has_left or not has_right:
+            return self.schema.edge_for_type(edge.type)
+        if edge.direction is Direction.LEFT_TO_RIGHT:
+            return self._edge_for_directed_labels_or_fallback(edge.type, left.label, right.label)
+        if edge.direction is Direction.RIGHT_TO_LEFT:
+            return self._edge_for_directed_labels_or_fallback(edge.type, right.label, left.label)
+        return self.schema.edge_for_type_undirected(edge.type, left.label, right.label)
 
     def _merge_label(self, current: str | None, candidate: str | None, node_index: int) -> str | None:
         if not candidate:
@@ -181,12 +198,34 @@ class Mapping:
             raise ValueError(f"Unable to infer unique label for anonymous node at index {node_index}")
         return current
 
-    def _assign_node_aliases(self, nodes: List[Node]) -> Tuple[List[str], Dict[str, str]]:
-        aliases_by_index: List[str] = []
-        aliases_by_variable: Dict[str, str] = {}
+    def _assign_node_aliases(self, nodes: list[Node]) -> tuple[list[str], dict[str, str]]:
+        aliases_by_index: list[str] = []
+        aliases_by_variable: dict[str, str] = {}
         for idx, node in enumerate(nodes):
             alias = f"t{idx}"
             aliases_by_index.append(alias)
             if node.variable is not None:
                 aliases_by_variable[node.variable] = alias
         return aliases_by_index, aliases_by_variable
+
+    def _resolve_relation(
+        self,
+        edge: Any,
+        left: Node,
+        right: Node,
+    ) -> EdgeMapping:
+        if edge.direction is Direction.LEFT_TO_RIGHT:
+            return self._edge_for_directed_labels_or_fallback(edge.type, left.label, right.label)
+        if edge.direction is Direction.RIGHT_TO_LEFT:
+            return self._edge_for_directed_labels_or_fallback(edge.type, right.label, left.label)
+
+        return self.schema.edge_for_type_undirected(edge.type, left.label, right.label)
+
+    def _edge_for_directed_labels_or_fallback(self, type: str, from_label: str | None, to_label: str | None) -> EdgeMapping:
+        try:
+            return self.schema.edge_for_type_with_labels(type, from_label, to_label)
+        except ValueError as directed_missing:
+            try:
+                return self.schema.edge_for_type(type)
+            except ValueError:
+                raise ValueError(f"Edge mapping labels do not match nodes: {type}") from directed_missing

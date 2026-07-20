@@ -1,12 +1,8 @@
 package com.iisaka.cypher2sql.query.cypher;
 
-public final class Edge {
-    public enum Direction {
-        LEFT_TO_RIGHT,
-        RIGHT_TO_LEFT,
-        UNDIRECTED
-    }
+import java.util.Objects;
 
+public final class Edge {
     private final String variable;
     private final String type;
     private final Direction direction;
@@ -27,6 +23,12 @@ public final class Edge {
 
     public Direction direction() {
         return direction;
+    }
+
+    public enum Direction {
+        LEFT_TO_RIGHT,
+        RIGHT_TO_LEFT,
+        UNDIRECTED
     }
 
     static Edge fromPatternText(final String text) {
@@ -74,5 +76,28 @@ public final class Edge {
 
     private static String emptyToNull(final String value) {
         return value == null || value.isBlank() ? null : value;
+    }
+
+    @Override
+    public boolean equals(final Object other) {
+        if (this == other) {
+            return true;
+        }
+        if (!(other instanceof Edge edge)) {
+            return false;
+        }
+        return Objects.equals(variable, edge.variable)
+                && Objects.equals(type, edge.type)
+                && direction == edge.direction;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(variable, type, direction);
+    }
+
+    @Override
+    public String toString() {
+        return "Edge[variable=" + variable + ", type=" + type + ", direction=" + direction + "]";
     }
 }

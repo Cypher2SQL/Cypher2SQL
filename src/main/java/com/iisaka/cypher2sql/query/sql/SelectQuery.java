@@ -2,6 +2,7 @@ package com.iisaka.cypher2sql.query.sql;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 public final class SelectQuery implements Query<Dialect> {
@@ -13,8 +14,8 @@ public final class SelectQuery implements Query<Dialect> {
 
     public static SelectQuery from(final String table, final String alias) {
         final SelectQuery select = new SelectQuery();
-        select.fromTable = table;
-        select.fromAlias = alias;
+        select.fromTable = Objects.requireNonNull(table, "table");
+        select.fromAlias = Objects.requireNonNull(alias, "alias");
         return select;
     }
 
@@ -25,17 +26,17 @@ public final class SelectQuery implements Query<Dialect> {
     }
 
     public SelectQuery addSelectColumn(final String column) {
-        selectColumns.add(column);
+        selectColumns.add(Objects.requireNonNull(column, "column"));
         return this;
     }
 
     public SelectQuery addJoin(final JoinClause join) {
-        joins.add(join);
+        joins.add(Objects.requireNonNull(join, "join"));
         return this;
     }
 
     public SelectQuery addWhere(final String clause) {
-        whereClauses.add(clause);
+        whereClauses.add(Objects.requireNonNull(clause, "clause"));
         return this;
     }
 
@@ -50,7 +51,9 @@ public final class SelectQuery implements Query<Dialect> {
                 .collect(Collectors.joining(" "));
         final String whereClause = whereClauses.isEmpty()
                 ? ""
-                : " WHERE " + String.join(" AND ", whereClauses);
-        return String.join(" ", List.of(selectClause, fromClause, joinClause, whereClause)).trim();
+                : "WHERE " + String.join(" AND ", whereClauses);
+        return java.util.stream.Stream.of(selectClause, fromClause, joinClause, whereClause)
+                .filter(part -> !part.isBlank())
+                .collect(Collectors.joining(" "));
     }
 }

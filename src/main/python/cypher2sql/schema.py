@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable
+import textwrap
+from typing import Any
 
 try:
     import yaml
@@ -97,15 +98,18 @@ class EdgeMapping:
 
 class SchemaDefinition:
     def __init__(self) -> None:
-        self._nodes: Dict[str, NodeMapping] = {}
-        self._edges: Dict[str, EdgeMapping] = {}
+        self._nodes: dict[str, NodeMapping] = {}
+        self._edges_by_key: dict[str, EdgeMapping] = {}
+        self._edges_by_type: dict[str, list[EdgeMapping]] = {}
 
     def add_node(self, mapping: NodeMapping) -> "SchemaDefinition":
         self._nodes[mapping.label] = mapping
         return self
 
     def add_edge(self, mapping: EdgeMapping) -> "SchemaDefinition":
-        self._edges[mapping.type] = mapping
+        key = self._edge_key(mapping.type, mapping.from_label, mapping.to_label)
+        self._edges_by_key[key] = mapping
+        self._edges_by_type.setdefault(mapping.type, []).append(mapping)
         return self
 
     def node_for_label(self, label: str) -> NodeMapping:
@@ -114,9 +118,31 @@ class SchemaDefinition:
         return self._nodes[label]
 
     def edge_for_type(self, type: str) -> EdgeMapping:
-        if type not in self._edges:
+        mappings = self._edges_by_type.get(type, [])
+        if not mappings:
             raise ValueError(f"No edge mapping for type: {type}")
-        return self._edges[type]
+        if len(mappings) > 1:
+            pairs = ", ".join(f"{m.from_label}->{m.to_label}" for m in mappings)
+            raise ValueError(f"Ambiguous edge mapping for type: {type}. Available pairs: {pairs}")
+        return mappings[0]
+
+    def edge_for_type_with_labels(self, type: str, from_label: str, to_label: str) -> EdgeMapping:
+        key = self._edge_key(type, from_label, to_label)
+        mapping = self._edges_by_key.get(key)
+        if mapping is None:
+            raise ValueError(f"No edge mapping for type/labels: {type} ({from_label}->{to_label})")
+        return mapping
+
+    def edge_for_type_undirected(self, type: str, left_label: str, right_label: str) -> EdgeMapping:
+        forward = self._edges_by_key.get(self._edge_key(type, left_label, right_label))
+        reverse = self._edges_by_key.get(self._edge_key(type, right_label, left_label))
+        if forward is not None and reverse is not None and forward is not reverse:
+            raise ValueError(f"Ambiguous undirected edge mapping for type/labels: {type} ({left_label}<->{right_label})")
+        if forward is not None:
+            return forward
+        if reverse is not None:
+            return reverse
+        raise ValueError(f"No edge mapping for undirected type/labels: {type} ({left_label}<->{right_label})")
 
     @classmethod
     def from_json_string(cls, raw: str) -> "SchemaDefinition":
@@ -128,17 +154,23 @@ class SchemaDefinition:
 
     @classmethod
     def from_dict(cls, payload: dict) -> "SchemaDefinition":
+        if not isinstance(payload, dict):
+            raise ValueError("Schema payload must be a mapping.")
         schema = cls()
-        for node in payload.get("nodes", []):
+        for idx, node in enumerate(payload.get("nodes", [])):
+            if not isinstance(node, dict):
+                raise ValueError(f"Schema node entry at index {idx} must be a mapping.")
             schema.add_node(
                 NodeMapping(
-                    label=node["label"],
-                    table=node["table"],
-                    primary_key=node["primaryKey"],
+                    label=_require_string(node, "label", "node"),
+                    table=_require_string(node, "table", "node"),
+                    primary_key=_require_string(node, "primaryKey", "node"),
                 )
             )
-        for edge in payload.get("edges", []):
-            kind = RelationshipKind(edge["kind"])
+        for idx, edge in enumerate(payload.get("edges", [])):
+            if not isinstance(edge, dict):
+                raise ValueError(f"Schema edge entry at index {idx} must be a mapping.")
+            kind = RelationshipKind(_require_string(edge, "kind", "edge"))
             schema.add_edge(_edge_mapping_from_payload(edge, kind))
         return schema
 
@@ -150,39 +182,108 @@ class SchemaDefinition:
     def from_yaml_path(cls, path: str | Path) -> "SchemaDefinition":
         return cls.from_dict(_yaml_load(Path(path).read_text(encoding="utf-8")))
 
+    @staticmethod
+    def _edge_key(type: str, from_label: str, to_label: str) -> str:
+        return f"{type}|{from_label}|{to_label}"
+
 
 def _edge_mapping_from_payload(edge: dict, kind: RelationshipKind) -> EdgeMapping:
     if kind is RelationshipKind.JOIN_TABLE:
         return EdgeMapping.for_join_table(
-            edge["type"],
-            edge["fromLabel"],
-            edge["toLabel"],
-            edge["joinTable"],
-            edge["fromJoinKey"],
-            edge["toJoinKey"],
+            _require_string(edge, "type", "edge"),
+            _require_string(edge, "fromLabel", "edge"),
+            _require_string(edge, "toLabel", "edge"),
+            _require_string(edge, "joinTable", "edge"),
+            _require_string(edge, "fromJoinKey", "edge"),
+            _require_string(edge, "toJoinKey", "edge"),
         )
     if kind is RelationshipKind.SELF_REFERENTIAL:
         return EdgeMapping.for_self_referential(
-            edge["type"],
-            edge["label"],
-            edge["fromKey"],
-            edge["toKey"],
+            _require_string(edge, "type", "edge"),
+            _require_string(edge, "label", "edge"),
+            _require_string(edge, "fromKey", "edge"),
+            _require_string(edge, "toKey", "edge"),
         )
     if kind is RelationshipKind.ONE_TO_MANY:
         return EdgeMapping.for_one_to_many(
-            edge["type"],
-            edge["parentLabel"],
-            edge["childLabel"],
-            edge["parentPrimaryKey"],
-            edge["childForeignKey"],
+            _require_string(edge, "type", "edge"),
+            _require_string(edge, "parentLabel", "edge"),
+            _require_string(edge, "childLabel", "edge"),
+            _require_string(edge, "parentPrimaryKey", "edge"),
+            _require_string(edge, "childForeignKey", "edge"),
         )
     raise ValueError(f"Unknown relationship kind: {kind}")
 
 
 def _yaml_load(raw: str) -> dict:
     if yaml is None:
-        raise RuntimeError("PyYAML is not installed. Install 'pyyaml' to read YAML schema files.")
-    payload: Any = yaml.safe_load(raw)
+        payload = _simple_schema_yaml_load(raw)
+    else:
+        payload = yaml.safe_load(raw)
     if not isinstance(payload, dict):
         raise ValueError("Schema YAML must be a mapping.")
     return payload
+
+
+def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Schema {context} missing required string field: {key}")
+    return value
+
+
+def _simple_schema_yaml_load(raw: str) -> dict[str, Any]:
+    raw = textwrap.dedent(raw)
+    payload: dict[str, Any] = {}
+    current_section: str | None = None
+    current_item: dict[str, str] | None = None
+
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- ") and current_section is None:
+            raise ValueError("Schema YAML must be a mapping.")
+
+        indent = len(line) - len(line.lstrip(" "))
+        if indent == 0:
+            if not stripped.endswith(":"):
+                raise ValueError("Schema YAML must be a mapping.")
+            section = stripped[:-1].strip()
+            payload[section] = []
+            current_section = section
+            current_item = None
+            continue
+
+        if indent == 2 and stripped.startswith("- "):
+            if current_section is None:
+                raise ValueError("Schema YAML must be a mapping.")
+            current_item = {}
+            payload[current_section].append(current_item)
+            inline = stripped[2:].strip()
+            if inline:
+                key, value = _parse_yaml_key_value(inline)
+                current_item[key] = value
+            continue
+
+        if indent >= 4:
+            if current_item is None:
+                raise ValueError("Schema YAML must be a mapping.")
+            key, value = _parse_yaml_key_value(stripped)
+            current_item[key] = value
+            continue
+
+        raise ValueError("Schema YAML must be a mapping.")
+
+    return payload
+
+
+def _parse_yaml_key_value(text: str) -> tuple[str, str]:
+    if ":" not in text:
+        raise ValueError("Schema YAML must be a mapping.")
+    key, value = text.split(":", 1)
+    parsed_key = key.strip()
+    parsed_value = value.strip()
+    if parsed_value.startswith(("'", '"')) and parsed_value.endswith(("'", '"')) and len(parsed_value) >= 2:
+        parsed_value = parsed_value[1:-1]
+    return parsed_key, parsed_value

@@ -10,6 +10,9 @@ public final class BasicDialect implements Dialect {
 
     @Override
     public String quoteIdentifier(final String identifier) {
-        return "\"" + identifier + "\"";
+        if (identifier == null) {
+            throw new IllegalArgumentException("identifier cannot be null");
+        }
+        return "\"" + identifier.replace("\"", "\"\"") + "\"";
     }
 }

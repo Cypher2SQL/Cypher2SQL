@@ -1,5 +1,7 @@
 package com.iisaka.cypher2sql.schema;
 
+import java.util.List;
+
 public final class EdgeMapping {
     public enum RelationshipKind {
         JOIN_TABLE,
@@ -119,5 +121,37 @@ public final class EdgeMapping {
 
     public String childForeignKey() {
         return childForeignKey;
+    }
+
+    public boolean matchesDirectedLabels(final String from, final String to) {
+        return fromLabel.equals(from) && toLabel.equals(to);
+    }
+
+    public boolean matchesUndirectedLabels(final String left, final String right) {
+        return matchesDirectedLabels(left, right) || matchesDirectedLabels(right, left);
+    }
+
+    public boolean isLeftParent(final String leftLabel, final String rightLabel) {
+        return matchesDirectedLabels(leftLabel, rightLabel);
+    }
+
+    public boolean isRightParent(final String leftLabel, final String rightLabel) {
+        return matchesDirectedLabels(rightLabel, leftLabel);
+    }
+
+    public List<String> joinTableProjection(final String joinAlias) {
+        return List.of(joinAlias + ".*");
+    }
+
+    public List<String> selfReferentialProjection(final String leftAlias, final String rightAlias) {
+        return List.of(leftAlias + "." + fromKey, rightAlias + "." + toKey);
+    }
+
+    public List<String> oneToManyProjectionForLeftParent(final String leftAlias, final String rightAlias) {
+        return List.of(rightAlias + "." + childForeignKey, leftAlias + "." + parentPrimaryKey);
+    }
+
+    public List<String> oneToManyProjectionForRightParent(final String leftAlias, final String rightAlias) {
+        return List.of(leftAlias + "." + childForeignKey, rightAlias + "." + parentPrimaryKey);
     }
 }

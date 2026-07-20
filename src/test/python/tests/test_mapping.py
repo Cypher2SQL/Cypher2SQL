@@ -214,6 +214,46 @@ class CypherSqlMappingTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "RETURN references unknown variable: x"):
             Mapping(self.schema).to_sql(query)
 
+    def test_respects_edge_direction_when_type_has_both_orientations(self) -> None:
+        schema = (
+            SchemaDefinition()
+            .add_node(NodeMapping("Person", "people", "id"))
+            .add_node(NodeMapping("Movie", "movies", "id"))
+            .add_edge(EdgeMapping.for_one_to_many("LINKED", "Person", "Movie", "id", "author_id"))
+            .add_edge(EdgeMapping.for_one_to_many("LINKED", "Movie", "Person", "id", "favorite_movie_id"))
+        )
+        left_to_right = Query(
+            "MATCH (p:Person)-[:LINKED]->(m:Movie) RETURN p, m",
+            [
+                Pattern(
+                    nodes=[Node("p", "Person"), Node("m", "Movie")],
+                    edges=[Edge(variable=None, type="LINKED", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("p"), ReturnItem("m")],
+        )
+        right_to_left = Query(
+            "MATCH (p:Person)<-[:LINKED]-(m:Movie) RETURN p, m",
+            [
+                Pattern(
+                    nodes=[Node("p", "Person"), Node("m", "Movie")],
+                    edges=[Edge(variable=None, type="LINKED", direction=Direction.RIGHT_TO_LEFT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("p"), ReturnItem("m")],
+        )
+
+        ltr_sql = Mapping(schema).to_sql(left_to_right).render(BasicDialect())
+        rtl_sql = Mapping(schema).to_sql(right_to_left).render(BasicDialect())
+
+        self.assertEqual('SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id', ltr_sql)
+        self.assertEqual(
+            'SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "movies" t1 ON t0.favorite_movie_id = t1.id',
+            rtl_sql,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

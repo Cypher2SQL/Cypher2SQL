@@ -3,7 +3,6 @@ package com.iisaka.cypher2sql;
 import com.iisaka.cypher2sql.schema.EdgeMapping;
 import com.iisaka.cypher2sql.schema.NodeMapping;
 import com.iisaka.cypher2sql.schema.SchemaDefinition;
-import com.iisaka.cypher2sql.schema.SchemaDefinitionJson;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -47,7 +46,7 @@ class SchemaDefinitionJsonTest {
                 }
                 """;
 
-        final SchemaDefinition schema = SchemaDefinitionJson.fromString(raw);
+        final SchemaDefinition schema = SchemaDefinition.fromJsonString(raw);
 
         final NodeMapping person = schema.nodeForLabel("Person");
         assertEquals("people", person.table());
@@ -79,7 +78,7 @@ class SchemaDefinitionJsonTest {
                 }
                 """;
 
-        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> SchemaDefinitionJson.fromString(raw));
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> SchemaDefinition.fromJsonString(raw));
         assertEquals("Edge mapping missing kind for type: ACTED_IN", ex.getMessage());
     }
 }

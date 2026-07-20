@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Protocol
+from typing import Protocol
 
 
 class Dialect(Protocol):
@@ -33,11 +33,11 @@ class JoinClause:
 
 @dataclass
 class SelectQuery(SqlRenderable):
-    select_columns: List[str] = field(default_factory=list)
+    select_columns: list[str] = field(default_factory=list)
     from_table: str | None = None
     from_alias: str | None = None
-    joins: List[JoinClause] = field(default_factory=list)
-    where_clauses: List[str] = field(default_factory=list)
+    joins: list[JoinClause] = field(default_factory=list)
+    where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
     def select_from(cls, table: str, alias: str) -> "SelectQuery":
@@ -78,7 +78,7 @@ class SelectQuery(SqlRenderable):
 @dataclass
 class InsertQuery(SqlRenderable):
     table: str
-    values: Dict[str, str] = field(default_factory=dict)
+    values: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def into(cls, table: str) -> "InsertQuery":
@@ -101,8 +101,8 @@ class InsertQuery(SqlRenderable):
 @dataclass
 class UpdateQuery(SqlRenderable):
     table: str
-    assignments: Dict[str, str] = field(default_factory=dict)
-    where_clauses: List[str] = field(default_factory=list)
+    assignments: dict[str, str] = field(default_factory=dict)
+    where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
     def table_name(cls, table: str) -> "UpdateQuery":
@@ -132,7 +132,7 @@ class UpdateQuery(SqlRenderable):
 @dataclass
 class DeleteQuery(SqlRenderable):
     table: str
-    where_clauses: List[str] = field(default_factory=list)
+    where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
     def from_table(cls, table: str) -> "DeleteQuery":
@@ -157,4 +157,7 @@ class BasicDialect:
         return "basic"
 
     def quote_identifier(self, identifier: str) -> str:
-        return f'"{identifier}"'
+        if identifier is None:
+            raise ValueError("identifier cannot be None")
+        escaped = identifier.replace('"', '""')
+        return f'"{escaped}"'
