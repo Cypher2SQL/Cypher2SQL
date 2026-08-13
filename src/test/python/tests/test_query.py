@@ -6,6 +6,7 @@ from cypher2sql.mapping import Mapping
 from cypher2sql.schema import SchemaDefinition
 from cypher2sql.sql_query import StandardGrammar
 
+
 class IntegrationTest(unittest.TestCase):
     def setUp(self) -> None:
         if cypher_query.InputStream is None:
@@ -419,7 +420,6 @@ class IntegrationTest(unittest.TestCase):
             "INNER JOIN \"graph\".\"movies\" t1 ON j2.movie_tenant_id = t1.tenant_id AND j2.movie_id = t1.id",
             sql,
         )
-
 
 if __name__ == "__main__":
     unittest.main()

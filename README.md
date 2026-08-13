@@ -403,6 +403,16 @@ See `/Users/kiisaka/IdeaProjects/Cypher2SQL/schema.example.yaml` or `/Users/kiis
 JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew test
 ```
 
+Run Java integration tests separately:
+
+```bash
+JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew integrationTest
+```
+
+The Java integration suite creates a fresh local SQLite database from
+`src/test/resources/integration/database.sql`, loads schema mapping from
+`src/test/resources/integration/schema.yaml`, renders a Cypher query to SQL, and executes it through JDBC.
+
 ### Run Sample
 
 Run `com.iisaka.Main` from your IDE, or add the Gradle `application` plugin if you want `./gradlew run`.
@@ -431,6 +441,14 @@ python -m pip install -r requirements-dev.txt
 ```bash
 PYTHONPATH=src/main/python .venv/bin/python -m unittest discover -s src/test/python/tests -v
 ```
+
+Run Python integration tests separately:
+
+```bash
+PYTHONPATH=src/main/python .venv/bin/python -m unittest discover -s src/test/python/integration -v
+```
+
+The Python integration suite uses the same SQL and schema fixture with Python's built-in `sqlite3` module.
 
 ### Programmatic Example
 
