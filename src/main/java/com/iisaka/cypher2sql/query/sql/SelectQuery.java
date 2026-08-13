@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-public final class SelectQuery implements Query<Dialect> {
+public final class SelectQuery implements Query<Grammar> {
     private final List<String> selectColumns = new ArrayList<>();
     private String fromTable;
     private String fromAlias;
@@ -41,12 +41,12 @@ public final class SelectQuery implements Query<Dialect> {
     }
 
     @Override
-    public String render(final Dialect dialect) {
+    public String render(final Grammar grammar) {
         final String selectClause = "SELECT " + String.join(", ", selectColumns);
-        final String fromClause = "FROM " + dialect.quoteIdentifier(fromTable) + " " + fromAlias;
+        final String fromClause = "FROM " + grammar.quoteIdentifier(fromTable) + " " + fromAlias;
         final String joinClause = joins.stream()
                 .map(join -> join.joinType().name() + " JOIN "
-                        + dialect.quoteIdentifier(join.table()) + " " + join.alias()
+                        + grammar.quoteIdentifier(join.table()) + " " + join.alias()
                         + " ON " + join.onCondition())
                 .collect(Collectors.joining(" "));
         final String whereClause = whereClauses.isEmpty()

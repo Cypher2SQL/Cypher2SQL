@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol
+from typing import Protocol, Self
 
 
-class Dialect(Protocol):
+class Grammar(Protocol):
     def name(self) -> str:  # pragma: no cover - protocol
         ...
 
@@ -13,8 +13,8 @@ class Dialect(Protocol):
         ...
 
 
-class SqlRenderable(Protocol):
-    def render(self, dialect: Dialect) -> str:  # pragma: no cover - protocol
+class Renderable(Protocol):
+    def render(self, grammar: Grammar) -> str:  # pragma: no cover - protocol
         ...
 
 
@@ -32,7 +32,7 @@ class JoinClause:
 
 
 @dataclass
-class SelectQuery(SqlRenderable):
+class SelectQuery(Renderable):
     select_columns: list[str] = field(default_factory=list)
     from_table: str | None = None
     from_alias: str | None = None
@@ -40,79 +40,77 @@ class SelectQuery(SqlRenderable):
     where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
-    def select_from(cls, table: str, alias: str) -> "SelectQuery":
+    def select_from(cls, table: str, alias: str) -> Self:
         select = cls()
         select.from_table = table
         select.from_alias = alias
         return select
 
     @classmethod
-    def select_all_from(cls, table: str, alias: str) -> "SelectQuery":
+    def select_all_from(cls, table: str, alias: str) -> Self:
         select = cls.select_from(table, alias)
         select.select_columns.append(f"{alias}.*")
         return select
 
-    def add_select_column(self, column: str) -> "SelectQuery":
+    def add_select_column(self, column: str) -> Self:
         self.select_columns.append(column)
         return self
 
-    def add_join(self, join: JoinClause) -> "SelectQuery":
+    def add_join(self, join: JoinClause) -> Self:
         self.joins.append(join)
         return self
 
-    def add_where(self, clause: str) -> "SelectQuery":
+    def add_where(self, clause: str) -> Self:
         self.where_clauses.append(clause)
         return self
 
-    def render(self, dialect: Dialect) -> str:
+    def render(self, grammar: Grammar) -> str:
         select_clause = "SELECT " + ", ".join(self.select_columns)
-        from_clause = f"FROM {dialect.quote_identifier(self.from_table)} {self.from_alias}"
+        from_clause = f"FROM {grammar.quote_identifier(self.from_table)} {self.from_alias}"
         join_clause = " ".join(
-            f"{join.join_type.value} JOIN {dialect.quote_identifier(join.table)} {join.alias} ON {join.on_condition}"
+            f"{join.join_type.value} JOIN {grammar.quote_identifier(join.table)} {join.alias} ON {join.on_condition}"
             for join in self.joins
         )
-        where_clause = "" if not self.where_clauses else " WHERE " + " AND ".join(self.where_clauses)
+        where_clause = "" if not self.where_clauses else "WHERE " + " AND ".join(self.where_clauses)
         return " ".join(part for part in (select_clause, from_clause, join_clause, where_clause) if part).strip()
 
 
 @dataclass
-class InsertQuery(SqlRenderable):
+class InsertQuery(Renderable):
     table: str
     values: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def into(cls, table: str) -> "InsertQuery":
+    def into(cls, table: str) -> Self:
         return cls(table=table)
 
-    def value(self, column: str, expression: str) -> "InsertQuery":
+    def value(self, column: str, expression: str) -> Self:
         self.values[column] = expression
         return self
 
     def is_empty(self) -> bool:
         return not self.values
 
-    def render(self, dialect: Dialect) -> str:
+    def render(self, grammar: Grammar) -> str:
         # Placeholder only: write queries are intentionally disabled while the project is read-only.
-        raise NotImplementedError(
-            "Write queries are disabled in read-only mode. InsertQuery is reserved for future enhancement."
-        )
+        raise NotImplementedError(_write_disabled_message(type(self).__name__))
 
 
 @dataclass
-class UpdateQuery(SqlRenderable):
+class UpdateQuery(Renderable):
     table: str
     assignments: dict[str, str] = field(default_factory=dict)
     where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
-    def table_name(cls, table: str) -> "UpdateQuery":
+    def table_name(cls, table: str) -> Self:
         return cls(table=table)
 
-    def set(self, column: str, expression: str) -> "UpdateQuery":
+    def set(self, column: str, expression: str) -> Self:
         self.assignments[column] = expression
         return self
 
-    def where(self, clause: str) -> "UpdateQuery":
+    def where(self, clause: str) -> Self:
         self.where_clauses.append(clause)
         return self
 
@@ -122,42 +120,41 @@ class UpdateQuery(SqlRenderable):
     def has_where_clause(self) -> bool:
         return bool(self.where_clauses)
 
-    def render(self, dialect: Dialect) -> str:
+    def render(self, grammar: Grammar) -> str:
         # Placeholder only: write queries are intentionally disabled while the project is read-only.
-        raise NotImplementedError(
-            "Write queries are disabled in read-only mode. UpdateQuery is reserved for future enhancement."
-        )
+        raise NotImplementedError(_write_disabled_message(type(self).__name__))
 
 
 @dataclass
-class DeleteQuery(SqlRenderable):
+class DeleteQuery(Renderable):
     table: str
     where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_table(cls, table: str) -> "DeleteQuery":
+    def from_table(cls, table: str) -> Self:
         return cls(table=table)
 
-    def where(self, clause: str) -> "DeleteQuery":
+    def where(self, clause: str) -> Self:
         self.where_clauses.append(clause)
         return self
 
     def has_where_clause(self) -> bool:
         return bool(self.where_clauses)
 
-    def render(self, dialect: Dialect) -> str:
+    def render(self, grammar: Grammar) -> str:
         # Placeholder only: write queries are intentionally disabled while the project is read-only.
-        raise NotImplementedError(
-            "Write queries are disabled in read-only mode. DeleteQuery is reserved for future enhancement."
-        )
+        raise NotImplementedError(_write_disabled_message(type(self).__name__))
 
 
-class BasicDialect:
+class StandardGrammar:
     def name(self) -> str:
-        return "basic"
+        return "standard"
 
     def quote_identifier(self, identifier: str) -> str:
         if identifier is None:
             raise ValueError("identifier cannot be None")
-        escaped = identifier.replace('"', '""')
-        return f'"{escaped}"'
+        return ".".join(f'"{part.replace("\"", "\"\"")}"' for part in identifier.split("."))
+
+
+def _write_disabled_message(query_class_name: str) -> str:
+    return f"Write queries are disabled in read-only mode. {query_class_name} is reserved for future enhancement."

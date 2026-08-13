@@ -3,7 +3,7 @@ import unittest
 from cypher2sql.cypher_query import Edge, Node, Pattern, Query, ReturnItem, Direction
 from cypher2sql.mapping import Mapping
 from cypher2sql.schema import EdgeMapping, NodeMapping, SchemaDefinition
-from cypher2sql.sql_query import BasicDialect
+from cypher2sql.sql_query import StandardGrammar
 
 
 class CypherSqlMappingTest(unittest.TestCase):
@@ -35,12 +35,21 @@ class CypherSqlMappingTest(unittest.TestCase):
 
     def test_renders_join_table(self) -> None:
         query = self._query("p", "Person", "ACTED_IN", "m", "Movie")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
             'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
             sql,
         )
+
+    def test_binds_to_read_query(self) -> None:
+        query = self._query("p", "Person", "ACTED_IN", "m", "Movie")
+        read_query = Mapping(self.schema).to_read_query(query)
+
+        self.assertEqual(1, read_query.pattern_count)
+        self.assertEqual("people", read_query.pattern_at(0).root.mapping.table)
+        self.assertEqual("t0", read_query.pattern_at(0).root.alias)
+        self.assertEqual(1, len(read_query.pattern_at(0).traversals))
 
     def test_renders_single_node_match(self) -> None:
         query = Query(
@@ -49,7 +58,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("p")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "people" t0', sql)
 
     def test_renders_join_table_rows_when_returning_edge_variable(self) -> None:
@@ -64,7 +73,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("r")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT j2.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
             'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
@@ -83,7 +92,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("r")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t1.author_id, t0.id FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id',
             sql,
@@ -101,7 +110,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("r")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.manager_id, t1.id FROM "people" t0 INNER JOIN "people" t1 ON t0.manager_id = t1.id',
             sql,
@@ -109,17 +118,17 @@ class CypherSqlMappingTest(unittest.TestCase):
 
     def test_renders_self_referential(self) -> None:
         query = self._query("p", "Person", "MANAGES", "m", "Person")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "people" t0 INNER JOIN "people" t1 ON t0.manager_id = t1.id', sql)
 
     def test_renders_one_to_many_parent_on_left(self) -> None:
         query = self._query("p", "Person", "AUTHORED", "m", "Movie")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id', sql)
 
     def test_renders_one_to_many_parent_on_right(self) -> None:
         query = self._query("m", "Movie", "AUTHORED", "p", "Person")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "movies" t0 INNER JOIN "people" t1 ON t0.author_id = t1.id', sql)
 
     def test_raises_when_edge_labels_do_not_match(self) -> None:
@@ -154,7 +163,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("p"), ReturnItem("m"), ReturnItem("o")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.*, t1.*, t2.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id '
             'INNER JOIN "people" t2 ON t1.author_id = t2.id',
@@ -173,7 +182,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("p", "id"), ReturnItem("m", "id")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.id, t1.id FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
             'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
@@ -192,7 +201,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("p"), ReturnItem("m")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
             'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
@@ -245,8 +254,8 @@ class CypherSqlMappingTest(unittest.TestCase):
             return_items=[ReturnItem("p"), ReturnItem("m")],
         )
 
-        ltr_sql = Mapping(schema).to_sql(left_to_right).render(BasicDialect())
-        rtl_sql = Mapping(schema).to_sql(right_to_left).render(BasicDialect())
+        ltr_sql = Mapping(schema).to_sql(left_to_right).render(StandardGrammar())
+        rtl_sql = Mapping(schema).to_sql(right_to_left).render(StandardGrammar())
 
         self.assertEqual('SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id', ltr_sql)
         self.assertEqual(

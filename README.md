@@ -142,13 +142,14 @@ These require recursive SQL or a dedicated traversal engine.
 | Statistics | `stDev`, `percentileCont` | 3 | SQL analytic functions | Medium-High |
 | Path Functions | `shortestPath` | Deferred | Recursive CTE | Very High |
 
-### SQL Dialect Strategy
+### SQL Rendering Strategy
 
-Cypher2SQL should abstract over SQL dialect differences.
+Cypher2SQL currently exposes a `Grammar` abstraction for universal SQL rendering rules, such as identifier quoting.
+Vendor-specific SQL dialects should be modeled as specialized grammar implementations only when behavior actually differs.
 
-#### Dialect Adapter Responsibilities
+#### Grammar Responsibilities
 
-Each SQL dialect adapter should define:
+Each SQL grammar implementation should define:
 
 - Aggregate function names
 - Random function name
@@ -160,7 +161,7 @@ Each SQL dialect adapter should define:
 Example interface:
 
 ```text
-DialectAdapter {
+Grammar {
     renderAggregate(FunctionCall fn)
     renderStringFunction(FunctionCall fn)
     renderMathFunction(FunctionCall fn)
@@ -192,14 +193,14 @@ When implementing a new Cypher function:
   - Statistical
 - Define:
   - SQL equivalent
-  - Dialect differences
+  - Grammar or dialect differences
   - Null semantics
   - Edge-case behavior
 - Add:
   - Parser support
   - AST node support
   - Translator logic
-  - Dialect adapter implementation
+  - SQL grammar implementation
   - Unit tests
   - Integration tests
 - Add documentation entry to:
@@ -210,7 +211,7 @@ When implementing a new Cypher function:
 
 A function is complete only if:
 
-- Correct SQL emitted for all supported dialects
+- Correct SQL emitted for all supported SQL grammars
 - Null behavior matches Cypher
 - Works inside `RETURN`
 - Works inside `WITH`
@@ -257,7 +258,7 @@ Acceptance Criteria:
 - Parser recognizes function
 - AST node implemented
 - SQL translation implemented
-- Dialect adapters updated
+- SQL grammar implementations updated
 - Unit tests added
 - Integration tests added
 - Documentation updated
@@ -411,7 +412,7 @@ Run `com.iisaka.Main` from your IDE, or add the Gradle `application` plugin if y
 ```java
 final SchemaDefinition schema = SchemaDefinitionYaml.fromPath(Path.of("schema.yaml"));
 final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie)");
-final String sql = new Mapping(schema).toSql(query).render(new BasicDialect());
+final String sql = new Mapping(schema).toSql(query).render(new StandardGrammar());
 ```
 
 ## Python Usage
@@ -439,11 +440,11 @@ Note: the Python ANTLR parser expects a complete query form (for example, includ
 from cypher2sql.cypher_query import Query
 from cypher2sql.mapping import Mapping
 from cypher2sql.schema import SchemaDefinition
-from cypher2sql.sql_query import BasicDialect
+from cypher2sql.sql_query import StandardGrammar
 
 schema = SchemaDefinition.from_yaml_path("schema.yaml")
 query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m")
-sql = Mapping(schema).to_sql(query).render(BasicDialect())
+sql = Mapping(schema).to_sql(query).render(StandardGrammar())
 print(sql)
 ```
 

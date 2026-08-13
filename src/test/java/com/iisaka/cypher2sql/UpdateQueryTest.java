@@ -1,6 +1,6 @@
 package com.iisaka.cypher2sql;
 
-import com.iisaka.cypher2sql.query.sql.BasicDialect;
+import com.iisaka.cypher2sql.query.sql.StandardGrammar;
 import com.iisaka.cypher2sql.query.sql.UpdateQuery;
 import org.junit.jupiter.api.Test;
 
@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class SqlUpdateTest {
+class UpdateQueryTest {
     @Test
     void throwsBecauseWriteQueriesAreDisabled() {
         final UpdateQuery update = UpdateQuery.table("people")
@@ -18,7 +18,7 @@ class SqlUpdateTest {
         assertTrue(update.hasAssignments());
         assertTrue(update.hasWhereClause());
         final UnsupportedOperationException ex =
-                assertThrows(UnsupportedOperationException.class, () -> update.render(new BasicDialect()));
+                assertThrows(UnsupportedOperationException.class, () -> update.render(new StandardGrammar()));
         assertEquals(
                 "Write queries are disabled in read-only mode. UpdateQuery is reserved for future enhancement.",
                 ex.getMessage());

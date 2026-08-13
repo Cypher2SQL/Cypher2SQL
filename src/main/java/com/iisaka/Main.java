@@ -1,6 +1,6 @@
 package com.iisaka;
 
-import com.iisaka.cypher2sql.query.sql.BasicDialect;
+import com.iisaka.cypher2sql.query.sql.StandardGrammar;
 import com.iisaka.cypher2sql.query.cypher.Query;
 import com.iisaka.cypher2sql.schema.EdgeMapping;
 import com.iisaka.cypher2sql.schema.NodeMapping;
@@ -20,7 +20,7 @@ public class Main {
                         "movie_id"));
 
         final Query query = Query.of("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie)");
-        final String sql = query.asSql(schema).render(new BasicDialect());
+        final String sql = query.asSql(schema).render(new StandardGrammar());
         System.out.println(sql);
     }
 }

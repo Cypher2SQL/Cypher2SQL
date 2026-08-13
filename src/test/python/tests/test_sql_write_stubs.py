@@ -1,6 +1,6 @@
 import unittest
 
-from cypher2sql.sql_query import BasicDialect, DeleteQuery, InsertQuery, UpdateQuery
+from cypher2sql.sql_query import StandardGrammar, DeleteQuery, InsertQuery, UpdateQuery
 
 
 class SqlWriteStubTest(unittest.TestCase):
@@ -11,7 +11,7 @@ class SqlWriteStubTest(unittest.TestCase):
             NotImplementedError,
             "Write queries are disabled in read-only mode. InsertQuery is reserved for future enhancement.",
         ):
-            insert.render(BasicDialect())
+            insert.render(StandardGrammar())
 
     def test_update_placeholder_raises_in_read_only_mode(self) -> None:
         update = UpdateQuery.table_name("people").set("name", "'Bob'").where("id = 1")
@@ -21,7 +21,7 @@ class SqlWriteStubTest(unittest.TestCase):
             NotImplementedError,
             "Write queries are disabled in read-only mode. UpdateQuery is reserved for future enhancement.",
         ):
-            update.render(BasicDialect())
+            update.render(StandardGrammar())
 
     def test_delete_placeholder_raises_in_read_only_mode(self) -> None:
         delete = DeleteQuery.from_table("people").where("id = 1")
@@ -30,7 +30,7 @@ class SqlWriteStubTest(unittest.TestCase):
             NotImplementedError,
             "Write queries are disabled in read-only mode. DeleteQuery is reserved for future enhancement.",
         ):
-            delete.render(BasicDialect())
+            delete.render(StandardGrammar())
 
 
 if __name__ == "__main__":

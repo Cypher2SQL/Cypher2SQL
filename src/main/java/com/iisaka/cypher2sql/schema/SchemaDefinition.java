@@ -165,10 +165,7 @@ public final class SchemaDefinition {
                     throw new IllegalArgumentException("Each node entry must be a mapping.");
                 }
                 final Map<String, Object> node = (Map<String, Object>) nodeRaw;
-                schema.addNode(new NodeMapping(
-                        requireString(node, "label", "node"),
-                        requireString(node, "table", "node"),
-                        requireString(node, "primaryKey", "node")));
+                schema.addNode(nodeMappingFromPayload(node));
             }
         }
 
@@ -181,52 +178,101 @@ public final class SchemaDefinition {
                 final Map<String, Object> edge = (Map<String, Object>) edgeRaw;
                 final EdgeMapping.RelationshipKind kind = EdgeMapping.RelationshipKind.valueOf(
                         requireString(edge, "kind", "edge"));
-                schema.addEdge(yamlEdgeMappingFromPayload(edge, kind));
+                schema.addEdge(edgeMappingFromPayload(edge, kind));
             }
         }
 
         return schema;
     }
 
-    private static EdgeMapping yamlEdgeMappingFromPayload(
+    private static NodeMapping nodeMappingFromPayload(final Map<String, Object> node) {
+        final String label = requireString(node, "label", "node");
+        return new NodeMapping(
+                label,
+                stringList(node.get("labels"), List.of(label)),
+                stringList(node.get("inherits"), List.of()),
+                optionalString(node.get("catalog")),
+                optionalString(node.get("schema")),
+                requireString(node, "table", "node"),
+                stringList(firstPresent(node, "primaryKeys", "primaryKey"), List.of("id")),
+                propertyMappings(node.get("properties")),
+                nestedStringList(node.get("uniqueKeys")));
+    }
+
+    private static EdgeMapping edgeMappingFromPayload(
             final Map<String, Object> edge,
             final EdgeMapping.RelationshipKind kind) {
-        return switch (kind) {
+        final Map<String, PropertyMapping> properties = propertyMappings(edge.get("properties"));
+        final EdgeMapping mapping = switch (kind) {
             case JOIN_TABLE -> EdgeMapping.forJoinTable(
                     requireString(edge, "type", "edge"),
                     requireString(edge, "fromLabel", "edge"),
                     requireString(edge, "toLabel", "edge"),
                     requireString(edge, "joinTable", "edge"),
-                    requireString(edge, "fromJoinKey", "edge"),
-                    requireString(edge, "toJoinKey", "edge"));
+                    stringList(firstPresent(edge, "fromJoinKeys", "fromJoinKey"), List.of()),
+                    stringList(firstPresent(edge, "toJoinKeys", "toJoinKey"), List.of()),
+                    properties);
             case SELF_REFERENTIAL -> EdgeMapping.forSelfReferential(
                     requireString(edge, "type", "edge"),
-                    requireString(edge, "label", "edge"),
-                    requireString(edge, "fromKey", "edge"),
-                    requireString(edge, "toKey", "edge"));
+                    requireString(firstPresent(edge, "label", "fromLabel"), "edge.label"),
+                    stringList(firstPresent(edge, "fromKeys", "fromKey"), List.of()),
+                    stringList(firstPresent(edge, "toKeys", "toKey"), List.of()),
+                    properties);
             case ONE_TO_MANY -> EdgeMapping.forOneToMany(
                     requireString(edge, "type", "edge"),
                     requireString(edge, "parentLabel", "edge"),
                     requireString(edge, "childLabel", "edge"),
-                    requireString(edge, "parentPrimaryKey", "edge"),
-                    requireString(edge, "childForeignKey", "edge"));
+                    stringList(firstPresent(edge, "parentPrimaryKeys", "parentPrimaryKey"), List.of()),
+                    stringList(firstPresent(edge, "childForeignKeys", "childForeignKey"), List.of()),
+                    properties);
+            case MANY_TO_ONE -> EdgeMapping.forManyToOne(
+                    requireString(edge, "type", "edge"),
+                    requireString(edge, "fromLabel", "edge"),
+                    requireString(edge, "toLabel", "edge"),
+                    stringList(firstPresent(edge, "fromForeignKeys", "fromForeignKey"), List.of()),
+                    stringList(firstPresent(edge, "toPrimaryKeys", "toPrimaryKey"), List.of()),
+                    properties);
         };
+        final EdgeMapping.Cardinality cardinality = edge.get("cardinality") instanceof String rawCardinality
+                ? EdgeMapping.Cardinality.valueOf(rawCardinality)
+                : null;
+        final boolean unique = edge.get("unique") instanceof Boolean rawUnique && rawUnique;
+        return mapping.withMetadata(cardinality, unique);
     }
 
     private static SchemaDefinition fromJsonInputStream(final InputStream input) throws IOException {
-        final SchemaPayload payload = JSON.readValue(input, SchemaPayload.class);
+        final Object raw = JSON.readValue(input, Object.class);
+        if (!(raw instanceof Map<?, ?> payload)) {
+            throw new IllegalArgumentException("Schema JSON must be a mapping.");
+        }
+        return fromGenericPayload(payload);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static SchemaDefinition fromGenericPayload(final Map<?, ?> payload) {
         final SchemaDefinition schema = new SchemaDefinition();
-        if (payload.nodes() != null) {
-            for (final NodePayload node : payload.nodes()) {
-                schema.addNode(new NodeMapping(
-                        requireString(node.label(), "node.label"),
-                        requireString(node.table(), "node.table"),
-                        requireString(node.primaryKey(), "node.primaryKey")));
+        final Object nodesRaw = payload.get("nodes");
+        if (nodesRaw instanceof List<?> nodes) {
+            for (final Object nodeObj : nodes) {
+                if (!(nodeObj instanceof Map<?, ?> nodeRaw)) {
+                    throw new IllegalArgumentException("Each node entry must be a mapping.");
+                }
+                schema.addNode(nodeMappingFromPayload((Map<String, Object>) nodeRaw));
             }
         }
-        if (payload.edges() != null) {
-            for (final EdgePayload edge : payload.edges()) {
-                schema.addEdge(edge.asMapping());
+
+        final Object edgesRaw = payload.get("edges");
+        if (edgesRaw instanceof List<?> edges) {
+            for (final Object edgeObj : edges) {
+                if (!(edgeObj instanceof Map<?, ?> edgeRaw)) {
+                    throw new IllegalArgumentException("Each edge entry must be a mapping.");
+                }
+                final Map<String, Object> edge = (Map<String, Object>) edgeRaw;
+                if (!(edge.get("kind") instanceof String kindRaw) || kindRaw.isBlank()) {
+                    throw new IllegalArgumentException("Edge mapping missing kind for type: " + edge.get("type"));
+                }
+                final EdgeMapping.RelationshipKind kind = EdgeMapping.RelationshipKind.valueOf(kindRaw);
+                schema.addEdge(edgeMappingFromPayload(edge, kind));
             }
         }
         return schema;
@@ -247,51 +293,81 @@ public final class SchemaDefinition {
         return value;
     }
 
-    private record SchemaPayload(List<NodePayload> nodes, List<EdgePayload> edges) {
-    }
-
-    private record NodePayload(String label, String table, String primaryKey) {
-    }
-
-    private record EdgePayload(
-            String type,
-            EdgeMapping.RelationshipKind kind,
-            String fromLabel,
-            String toLabel,
-            String joinTable,
-            String fromJoinKey,
-            String toJoinKey,
-            String fromKey,
-            String toKey,
-            String parentLabel,
-            String childLabel,
-            String parentPrimaryKey,
-            String childForeignKey) {
-
-        EdgeMapping asMapping() {
-            if (kind == null) {
-                throw new IllegalArgumentException("Edge mapping missing kind for type: " + type);
-            }
-            return switch (kind) {
-                case JOIN_TABLE -> EdgeMapping.forJoinTable(
-                        requireString(type, "edge.type"),
-                        requireString(fromLabel, "edge.fromLabel"),
-                        requireString(toLabel, "edge.toLabel"),
-                        requireString(joinTable, "edge.joinTable"),
-                        requireString(fromJoinKey, "edge.fromJoinKey"),
-                        requireString(toJoinKey, "edge.toJoinKey"));
-                case SELF_REFERENTIAL -> EdgeMapping.forSelfReferential(
-                        requireString(type, "edge.type"),
-                        requireString(fromLabel, "edge.fromLabel"),
-                        requireString(fromKey, "edge.fromKey"),
-                        requireString(toKey, "edge.toKey"));
-                case ONE_TO_MANY -> EdgeMapping.forOneToMany(
-                        requireString(type, "edge.type"),
-                        requireString(parentLabel, "edge.parentLabel"),
-                        requireString(childLabel, "edge.childLabel"),
-                        requireString(parentPrimaryKey, "edge.parentPrimaryKey"),
-                        requireString(childForeignKey, "edge.childForeignKey"));
-            };
+    private static String requireString(final Object value, final String fieldName) {
+        if (!(value instanceof String stringValue) || stringValue.isBlank()) {
+            throw new IllegalArgumentException("Schema JSON missing required string field: " + fieldName);
         }
+        return stringValue;
+    }
+
+    private static String optionalString(final Object value) {
+        return value instanceof String stringValue && !stringValue.isBlank() ? stringValue : null;
+    }
+
+    private static Object firstPresent(final Map<String, Object> payload, final String primaryKey, final String fallbackKey) {
+        return payload.containsKey(primaryKey) ? payload.get(primaryKey) : payload.get(fallbackKey);
+    }
+
+    private static List<String> stringList(final Object raw, final List<String> defaultValue) {
+        if (raw == null) {
+            return defaultValue;
+        }
+        if (raw instanceof String value) {
+            return List.of(value);
+        }
+        if (raw instanceof List<?> values) {
+            return values.stream()
+                    .map(value -> {
+                        if (!(value instanceof String stringValue) || stringValue.isBlank()) {
+                            throw new IllegalArgumentException("Schema list values must be non-blank strings.");
+                        }
+                        return stringValue;
+                    })
+                    .toList();
+        }
+        throw new IllegalArgumentException("Schema value must be a string or list of strings.");
+    }
+
+    private static List<List<String>> nestedStringList(final Object raw) {
+        if (raw == null) {
+            return List.of();
+        }
+        if (!(raw instanceof List<?> values)) {
+            throw new IllegalArgumentException("Schema uniqueKeys must be a list.");
+        }
+        return values.stream().map(value -> stringList(value, List.of())).toList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, PropertyMapping> propertyMappings(final Object raw) {
+        if (raw == null) {
+            return Map.of();
+        }
+        if (!(raw instanceof Map<?, ?> rawMap)) {
+            throw new IllegalArgumentException("Schema properties must be a mapping.");
+        }
+        final Map<String, PropertyMapping> properties = new LinkedHashMap<>();
+        for (final Map.Entry<?, ?> entry : rawMap.entrySet()) {
+            if (!(entry.getKey() instanceof String property) || property.isBlank()) {
+                throw new IllegalArgumentException("Schema property names must be non-blank strings.");
+            }
+            final Object value = entry.getValue();
+            if (value instanceof String column) {
+                properties.put(property, PropertyMapping.of(property, column));
+                continue;
+            }
+            if (value instanceof Map<?, ?> mappingRaw) {
+                final Map<String, Object> mapping = (Map<String, Object>) mappingRaw;
+                properties.put(property, new PropertyMapping(
+                        property,
+                        requireString(mapping, "column", "property"),
+                        optionalString(mapping.get("type")),
+                        !(mapping.get("nullable") instanceof Boolean nullable) || nullable,
+                        mapping.get("quote") instanceof Boolean quote && quote));
+                continue;
+            }
+            throw new IllegalArgumentException("Schema property mapping must be a string or mapping.");
+        }
+        return properties;
     }
 }

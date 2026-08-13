@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-public final class InsertQuery implements Query<Dialect> {
+public final class InsertQuery implements Query<Grammar> {
     private final String table;
     private final Map<String, String> values = new LinkedHashMap<>();
 
@@ -28,7 +28,7 @@ public final class InsertQuery implements Query<Dialect> {
     }
 
     @Override
-    public String render(final Dialect dialect) {
+    public String render(final Grammar grammar) {
         // Placeholder only: write queries are intentionally disabled while the project is read-only.
         throw new UnsupportedOperationException(
                 "Write queries are disabled in read-only mode. InsertQuery is reserved for future enhancement.");

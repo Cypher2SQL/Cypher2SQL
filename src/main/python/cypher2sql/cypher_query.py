@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -27,7 +28,7 @@ class Direction(Enum):
 
 @dataclass(frozen=True)
 class Node:
-    variable: str
+    variable: str | None
     label: str | None
 
 
@@ -45,9 +46,75 @@ class Pattern:
 
 
 @dataclass(frozen=True)
+class Expression:
+    pass
+
+
+@dataclass(frozen=True)
+class VariableExpression(Expression):
+    name: str
+
+
+@dataclass(frozen=True)
+class PropertyExpression(Expression):
+    receiver: Expression
+    property: str
+
+
+@dataclass(frozen=True)
+class ConstantExpression(Expression):
+    value: Any
+
+
+@dataclass(frozen=True)
+class FunctionExpression(Expression):
+    name: str
+    arguments: list[Expression]
+
+
+@dataclass(frozen=True)
+class BinaryExpression(Expression):
+    left: Expression
+    operator: str
+    right: Expression
+
+
+@dataclass(frozen=True)
+class UnaryExpression(Expression):
+    operator: str
+    operand: Expression
+
+
+@dataclass(frozen=True)
+class CaseExpression(Expression):
+    subject: Expression | None
+    when_thens: list[tuple[Expression, Expression]]
+    else_expression: Expression | None
+
+
+@dataclass(frozen=True)
+class WildcardExpression(Expression):
+    pass
+
+
+@dataclass(frozen=True)
 class ReturnItem:
     variable: str
     property: str | None = None
+    alias: str | None = None
+
+    @builtins.property
+    def expression(self) -> Expression:
+        expression: Expression = VariableExpression(self.variable)
+        if self.property is not None:
+            expression = PropertyExpression(expression, self.property)
+        return expression
+
+
+@dataclass(frozen=True)
+class ProjectionItem:
+    expression: Expression
+    alias: str | None = None
 
 
 class Query:
@@ -56,13 +123,22 @@ class Query:
         raw: str,
         patterns: list[Pattern],
         parse_tree: Any,
-        return_items: list[ReturnItem] | None = None,
+        return_items: list[ReturnItem | ProjectionItem] | None = None,
+        where_expression: Expression | None = None,
+        with_projection_items: list[ProjectionItem] | None = None,
+        with_where_expression: Expression | None = None,
         has_variable_length_traversal: bool | None = None,
     ) -> None:
         self._raw = raw
         self._patterns = list(patterns)
         self._parse_tree = parse_tree
-        self._return_items = [] if return_items is None else list(return_items)
+        self._return_items = [
+            item if isinstance(item, ProjectionItem) else ProjectionItem(item.expression, item.alias)
+            for item in ([] if return_items is None else list(return_items))
+        ]
+        self._where_expression = where_expression
+        self._with_projection_items = [] if with_projection_items is None else list(with_projection_items)
+        self._with_where_expression = with_where_expression
         self._has_variable_length_traversal = (
             ("[*" in raw) if has_variable_length_traversal is None else has_variable_length_traversal
         )
@@ -80,8 +156,28 @@ class Query:
         return self._parse_tree
 
     @property
-    def return_items(self) -> list[ReturnItem]:
+    def return_items(self) -> list[ProjectionItem]:
         return list(self._return_items)
+
+    @property
+    def projection_items(self) -> list[ProjectionItem]:
+        return list(self._return_items)
+
+    @property
+    def where_expression(self) -> Expression | None:
+        return self._where_expression
+
+    @property
+    def with_projection_items(self) -> list[ProjectionItem]:
+        return list(self._with_projection_items)
+
+    @property
+    def with_where_expression(self) -> Expression | None:
+        return self._with_where_expression
+
+    @property
+    def has_with_clause(self) -> bool:
+        return bool(self._with_projection_items) or self._with_where_expression is not None
 
     @property
     def has_variable_length_traversal(self) -> bool:
@@ -95,7 +191,10 @@ class Query:
             cypher,
             patterns,
             parse_tree,
-            _extract_return_items(parser, parse_tree),
+            _extract_projection_items(parser, parse_tree, in_with=False),
+            _extract_where_expression(parser, parse_tree, in_with=False),
+            _extract_projection_items(parser, parse_tree, in_with=True),
+            _extract_where_expression(parser, parse_tree, in_with=True),
             _has_variable_length_traversal(parser, parse_tree),
         )
 
@@ -124,19 +223,37 @@ def _parse(cypher: str) -> tuple[Any, Any]:
     raise RuntimeError("No supported Cypher entry rule found on parser.")
 
 
-def _extract_return_items(parser: Any, parse_tree: Any) -> list[ReturnItem]:
-    return_items: list[ReturnItem] = []
+def _extract_projection_items(parser: Any, parse_tree: Any, in_with: bool) -> list[ProjectionItem]:
+    return_items: list[ProjectionItem] = []
     stack: list[Any] = [parse_tree]
     while stack:
         current = stack.pop()
         rule_name = _rule_name(parser, current)
-        if rule_name is not None and _is_return_item_rule(rule_name):
-            expr = _return_expression_text(current)
-            return_items.append(_parse_projection_expression(expr))
+        if rule_name is not None and _is_projection_item_rule(rule_name) and _is_with_context(current) == in_with:
+            expr, alias = _projection_expression_and_alias(current)
+            return_items.append(ProjectionItem(parse_expression(expr), alias))
         child_count = getattr(current, "getChildCount", lambda: 0)()
         for idx in range(child_count - 1, -1, -1):
             stack.append(current.getChild(idx))
     return return_items
+
+
+def _extract_where_expression(parser: Any, parse_tree: Any, in_with: bool) -> Expression | None:
+    stack: list[Any] = [parse_tree]
+    while stack:
+        current = stack.pop()
+        rule_name = _rule_name(parser, current)
+        if rule_name is not None and _normalized_rule_name(rule_name) == "where" and _is_with_context(current) == in_with:
+            for idx in range(getattr(current, "getChildCount", lambda: 0)()):
+                child = current.getChild(idx)
+                if _rule_name(parser, child) == "expression":
+                    return parse_expression(child.getText())
+            text = current.getText()
+            return parse_expression(text[5:] if text.upper().startswith("WHERE") else text)
+        child_count = getattr(current, "getChildCount", lambda: 0)()
+        for idx in range(child_count - 1, -1, -1):
+            stack.append(current.getChild(idx))
+    return None
 
 
 def _extract_patterns(parser: Any, parse_tree: Any) -> list[Pattern]:
@@ -174,7 +291,7 @@ def _find_pattern_elements(parser: Any, parse_tree: Any) -> list[Any]:
     while stack:
         current = stack.pop()
         rule_name = _rule_name(parser, current)
-        if rule_name == "patternElement":
+        if rule_name in ("patternElement", "patternElem"):
             roots.append(current)
         child_count = getattr(current, "getChildCount", lambda: 0)()
         for idx in range(child_count - 1, -1, -1):
@@ -189,53 +306,42 @@ def _rule_name(parser: Any, context: Any) -> str | None:
     return parser.ruleNames[get_rule_index()]
 
 
-def _is_return_item_rule(rule_name: str) -> bool:
-    normalized = "".join(c for c in rule_name if c.isalnum()).lower()
+def _is_projection_item_rule(rule_name: str) -> bool:
+    normalized = _normalized_rule_name(rule_name)
     return normalized.endswith("returnitem") or normalized.endswith("projectionitem")
 
 
-def _return_expression_text(context: Any) -> str:
+def _projection_expression_and_alias(context: Any) -> tuple[str, str | None]:
     before_alias: list[str] = []
+    after_alias: list[str] = []
     saw_as = False
-    for i in range(context.getChildCount()):
+    for i in range(getattr(context, "getChildCount", lambda: 0)()):
         child = context.getChild(i)
         if isinstance(child, TerminalNode) and child.getText().upper() == "AS":
             saw_as = True
-            break
-        before_alias.append(child.getText())
-    return ("".join(before_alias) if saw_as else context.getText()).strip()
+            continue
+        if saw_as:
+            after_alias.append(child.getText())
+        else:
+            before_alias.append(child.getText())
+    if saw_as:
+        return "".join(before_alias).strip(), "".join(after_alias).strip() or None
+    return context.getText().strip(), None
 
 
-def _parse_projection_expression(expr: str) -> ReturnItem:
-    dot = expr.find(".")
-    if dot < 0:
-        if _is_identifier(expr):
-            return ReturnItem(expr)
-        raise ValueError(
-            f"Unsupported RETURN expression: {expr}. Only variable or variable.property are supported."
-        )
-    if expr.find(".", dot + 1) >= 0:
-        raise ValueError(
-            f"Unsupported RETURN expression: {expr}. Only variable or variable.property are supported."
-        )
-    variable = expr[:dot]
-    prop = expr[dot + 1 :]
-    if _is_identifier(variable) and _is_identifier(prop):
-        return ReturnItem(variable, prop)
-    raise ValueError(
-        f"Unsupported RETURN expression: {expr}. Only variable or variable.property are supported."
-    )
+def _is_with_context(context: Any) -> bool:
+    current = getattr(context, "parentCtx", None) or getattr(context, "parent", None)
+    while current is not None:
+        name = type(current).__name__.lower()
+        text = getattr(current, "getText", lambda: "")()
+        if "with" in name or text.upper().startswith("WITH"):
+            return True
+        current = getattr(current, "parentCtx", None) or getattr(current, "parent", None)
+    return False
 
 
-def _is_identifier(value: str) -> bool:
-    if not value:
-        return False
-    if not (value[0].isalpha() or value[0] == "_"):
-        return False
-    for c in value[1:]:
-        if not (c.isalnum() or c == "_"):
-            return False
-    return True
+def _normalized_rule_name(rule_name: str) -> str:
+    return "".join(c for c in rule_name if c.isalnum()).lower()
 
 
 def _parse_node_text(text: str) -> Node:
@@ -319,3 +425,251 @@ def _has_variable_length_traversal(parser: Any, parse_tree: Any) -> bool:
         for idx in range(child_count - 1, -1, -1):
             stack.append(current.getChild(idx))
     return False
+
+
+def parse_expression(raw: str) -> Expression:
+    return _ExpressionParser(raw).parse()
+
+
+class _TokenKind(Enum):
+    IDENTIFIER = "IDENTIFIER"
+    NUMBER = "NUMBER"
+    STRING = "STRING"
+    KEYWORD = "KEYWORD"
+    SYMBOL = "SYMBOL"
+    EOF = "EOF"
+
+
+@dataclass(frozen=True)
+class _Token:
+    kind: _TokenKind
+    text: str
+    raw: str
+
+
+class _ExpressionParser:
+    _KEYWORDS = {"AND", "OR", "NOT", "CASE", "WHEN", "THEN", "ELSE", "END", "TRUE", "FALSE", "NULL"}
+    _COMPARISON = {"=": "=", "<>": "<>", "!=": "<>", "<": "<", "<=": "<=", ">": ">", ">=": ">="}
+
+    def __init__(self, raw: str) -> None:
+        self._raw = raw
+        self._tokens = self._tokenize(raw)
+        self._position = 0
+
+    def parse(self) -> Expression:
+        expression = self._parse_case_or_logical()
+        self._expect(_TokenKind.EOF)
+        return expression
+
+    def _parse_case_or_logical(self) -> Expression:
+        if self._match_keyword("CASE"):
+            return self._parse_case()
+        return self._parse_or()
+
+    def _parse_case(self) -> Expression:
+        subject = None if self._peek_keyword("WHEN") else self._parse_or()
+        when_thens: list[tuple[Expression, Expression]] = []
+        while self._peek_keyword("WHEN"):
+            self._expect_keyword("WHEN")
+            when_expression = self._parse_or()
+            self._expect_keyword("THEN")
+            then_expression = self._parse_case_or_logical()
+            when_thens.append((when_expression, then_expression))
+        else_expression = None
+        if self._match_keyword("ELSE"):
+            else_expression = self._parse_case_or_logical()
+        self._expect_keyword("END")
+        return CaseExpression(subject, when_thens, else_expression)
+
+    def _parse_or(self) -> Expression:
+        expression = self._parse_and()
+        while self._match_keyword("OR"):
+            expression = BinaryExpression(expression, "OR", self._parse_and())
+        return expression
+
+    def _parse_and(self) -> Expression:
+        expression = self._parse_comparison()
+        while self._match_keyword("AND"):
+            expression = BinaryExpression(expression, "AND", self._parse_comparison())
+        return expression
+
+    def _parse_comparison(self) -> Expression:
+        expression = self._parse_additive()
+        while self._peek().kind is _TokenKind.SYMBOL and self._peek().text in self._COMPARISON:
+            operator = self._COMPARISON[self._advance().text]
+            expression = BinaryExpression(expression, operator, self._parse_additive())
+        return expression
+
+    def _parse_additive(self) -> Expression:
+        expression = self._parse_multiplicative()
+        while self._peek().kind is _TokenKind.SYMBOL and self._peek().text in {"+", "-"}:
+            operator = self._advance().text
+            expression = BinaryExpression(expression, operator, self._parse_multiplicative())
+        return expression
+
+    def _parse_multiplicative(self) -> Expression:
+        expression = self._parse_unary()
+        while self._peek().kind is _TokenKind.SYMBOL and self._peek().text in {"*", "/", "%"}:
+            operator = self._advance().text
+            expression = BinaryExpression(expression, operator, self._parse_unary())
+        return expression
+
+    def _parse_unary(self) -> Expression:
+        if self._match_keyword("NOT"):
+            return UnaryExpression("NOT", self._parse_unary())
+        if self._match_symbol("-"):
+            return UnaryExpression("-", self._parse_unary())
+        if self._match_symbol("+"):
+            return UnaryExpression("+", self._parse_unary())
+        return self._parse_postfix()
+
+    def _parse_postfix(self) -> Expression:
+        expression = self._parse_primary()
+        while self._match_symbol("."):
+            expression = PropertyExpression(expression, self._expect(_TokenKind.IDENTIFIER).text)
+        return expression
+
+    def _parse_primary(self) -> Expression:
+        if self._match_symbol("("):
+            expression = self._parse_case_or_logical()
+            self._expect_symbol(")")
+            return expression
+        if self._match_symbol("*"):
+            return WildcardExpression()
+        token = self._peek()
+        if token.kind is _TokenKind.NUMBER:
+            self._advance()
+            return ConstantExpression(float(token.text) if "." in token.text else int(token.text))
+        if token.kind is _TokenKind.STRING:
+            self._advance()
+            return ConstantExpression(token.text)
+        if token.kind is _TokenKind.KEYWORD:
+            if token.text == "TRUE":
+                self._advance()
+                return ConstantExpression(True)
+            if token.text == "FALSE":
+                self._advance()
+                return ConstantExpression(False)
+            if token.text == "NULL":
+                self._advance()
+                return ConstantExpression(None)
+        identifier = self._expect(_TokenKind.IDENTIFIER)
+        if self._match_symbol("("):
+            arguments: list[Expression] = []
+            if not self._match_symbol(")"):
+                while True:
+                    arguments.append(self._parse_case_or_logical())
+                    if not self._match_symbol(","):
+                        break
+                self._expect_symbol(")")
+            return FunctionExpression(identifier.text, arguments)
+        return VariableExpression(identifier.text)
+
+    def _match_keyword(self, keyword: str) -> bool:
+        if self._peek_keyword(keyword):
+            self._advance()
+            return True
+        return False
+
+    def _peek_keyword(self, keyword: str) -> bool:
+        token = self._peek()
+        return token.kind is _TokenKind.KEYWORD and token.text == keyword
+
+    def _expect_keyword(self, keyword: str) -> None:
+        if not self._match_keyword(keyword):
+            raise self._unsupported()
+
+    def _match_symbol(self, symbol: str) -> bool:
+        token = self._peek()
+        if token.kind is _TokenKind.SYMBOL and token.text == symbol:
+            self._advance()
+            return True
+        return False
+
+    def _expect_symbol(self, symbol: str) -> None:
+        if not self._match_symbol(symbol):
+            raise self._unsupported()
+
+    def _expect(self, kind: _TokenKind) -> _Token:
+        token = self._peek()
+        if token.kind is not kind:
+            raise self._unsupported()
+        return self._advance()
+
+    def _peek(self) -> _Token:
+        return self._tokens[self._position]
+
+    def _advance(self) -> _Token:
+        token = self._tokens[self._position]
+        self._position += 1
+        return token
+
+    def _unsupported(self) -> ValueError:
+        remaining = "".join(token.raw for token in self._tokens[self._position:] if token.kind is not _TokenKind.EOF)
+        return ValueError(f"Unsupported RETURN expression: {remaining}")
+
+    @classmethod
+    def _tokenize(cls, raw: str) -> list[_Token]:
+        tokens: list[_Token] = []
+        i = 0
+        while i < len(raw):
+            c = raw[i]
+            if c.isspace():
+                i += 1
+                continue
+            if c == "'":
+                value: list[str] = []
+                i += 1
+                while i < len(raw):
+                    current = raw[i]
+                    if current == "'" and i + 1 < len(raw) and raw[i + 1] == "'":
+                        value.append("'")
+                        i += 2
+                        continue
+                    if current == "'":
+                        i += 1
+                        break
+                    value.append(current)
+                    i += 1
+                text = "".join(value)
+                tokens.append(_Token(_TokenKind.STRING, text, "'" + text.replace("'", "''") + "'"))
+                continue
+            if c.isdigit():
+                start = i
+                while i < len(raw) and (raw[i].isdigit() or raw[i] == "."):
+                    i += 1
+                text = raw[start:i]
+                tokens.append(_Token(_TokenKind.NUMBER, text, text))
+                continue
+            if c.isalpha() or c == "_":
+                start = i
+                while i < len(raw) and (raw[i].isalnum() or raw[i] == "_"):
+                    i += 1
+                text = raw[start:i]
+                upper = text.upper()
+                kind = _TokenKind.KEYWORD if upper in cls._KEYWORDS else _TokenKind.IDENTIFIER
+                tokens.append(_Token(kind, upper if kind is _TokenKind.KEYWORD else text, text))
+                continue
+            if i + 1 < len(raw) and raw[i : i + 2] in {"<>", "!=", "<=", ">="}:
+                text = raw[i : i + 2]
+                tokens.append(_Token(_TokenKind.SYMBOL, text, text))
+                i += 2
+                continue
+            if c in "()+-*/%=<>.,":
+                tokens.append(_Token(_TokenKind.SYMBOL, c, c))
+                i += 1
+                continue
+            raise ValueError(f"Unsupported RETURN expression: {raw[i:]}")
+        tokens.append(_Token(_TokenKind.EOF, "", ""))
+        return tokens
+
+
+def _is_identifier(value: str) -> bool:
+    if not value:
+        return False
+    if not (value[0].isalpha() or value[0] == "_"):
+        return False
+    for c in value[1:]:
+        if not (c.isalnum() or c == "_"):
+            return False
+    return True

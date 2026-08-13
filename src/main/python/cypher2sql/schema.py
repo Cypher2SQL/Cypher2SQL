@@ -14,16 +14,65 @@ except ImportError:  # pragma: no cover - runtime dependency
 
 
 @dataclass(frozen=True)
+class PropertyMapping:
+    property: str
+    column: str
+    type: str | None = None
+    nullable: bool = True
+    quote: bool = False
+
+
+@dataclass(frozen=True)
 class NodeMapping:
     label: str
     table: str
-    primary_key: str
+    primary_key: str | None = None
+    labels: list[str] | None = None
+    inherits: list[str] | None = None
+    catalog: str | None = None
+    schema: str | None = None
+    primary_keys: list[str] | None = None
+    properties: dict[str, PropertyMapping] | None = None
+    unique_keys: list[list[str]] | None = None
+
+    def __post_init__(self) -> None:
+        keys = self.primary_keys or ([self.primary_key] if self.primary_key else ["id"])
+        object.__setattr__(self, "primary_keys", list(keys))
+        object.__setattr__(self, "primary_key", keys[0] if len(keys) == 1 else None)
+        object.__setattr__(self, "labels", list(self.labels or [self.label]))
+        object.__setattr__(self, "inherits", list(self.inherits or []))
+        object.__setattr__(self, "properties", dict(self.properties or {}))
+        object.__setattr__(self, "unique_keys", [list(key) for key in (self.unique_keys or [])])
+
+    @property
+    def qualified_table(self) -> str:
+        return ".".join(part for part in (self.catalog, self.schema, self.table) if part)
+
+    def column_for_property(self, property_name: str) -> str:
+        mapping = self.properties.get(property_name)
+        return property_name if mapping is None else mapping.column
+
+    def qualified_column(self, alias: str, property_name: str) -> str:
+        return f"{alias}.{self.column_for_property(property_name)}"
+
+    def qualified_primary_key(self, alias: str) -> str:
+        if len(self.primary_keys) != 1:
+            raise ValueError(f"Composite primary key is not scalar for label: {self.label}")
+        return f"{alias}.{self.primary_keys[0]}"
 
 
 class RelationshipKind(Enum):
     JOIN_TABLE = "JOIN_TABLE"
     SELF_REFERENTIAL = "SELF_REFERENTIAL"
     ONE_TO_MANY = "ONE_TO_MANY"
+    MANY_TO_ONE = "MANY_TO_ONE"
+
+
+class Cardinality(Enum):
+    ONE_TO_ONE = "ONE_TO_ONE"
+    ONE_TO_MANY = "ONE_TO_MANY"
+    MANY_TO_ONE = "MANY_TO_ONE"
+    MANY_TO_MANY = "MANY_TO_MANY"
 
 
 @dataclass(frozen=True)
@@ -32,13 +81,45 @@ class EdgeMapping:
     from_label: str
     to_label: str
     relationship_kind: RelationshipKind
+    cardinality: Cardinality | None = None
+    unique: bool = False
     join_table: str | None = None
     from_join_key: str | None = None
     to_join_key: str | None = None
+    from_join_keys: list[str] | None = None
+    to_join_keys: list[str] | None = None
     from_key: str | None = None
     to_key: str | None = None
+    from_keys: list[str] | None = None
+    to_keys: list[str] | None = None
     parent_primary_key: str | None = None
     child_foreign_key: str | None = None
+    parent_primary_keys: list[str] | None = None
+    child_foreign_keys: list[str] | None = None
+    properties: dict[str, PropertyMapping] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "from_join_keys", list(self.from_join_keys or ([self.from_join_key] if self.from_join_key else [])))
+        object.__setattr__(self, "to_join_keys", list(self.to_join_keys or ([self.to_join_key] if self.to_join_key else [])))
+        object.__setattr__(self, "from_keys", list(self.from_keys or ([self.from_key] if self.from_key else [])))
+        object.__setattr__(self, "to_keys", list(self.to_keys or ([self.to_key] if self.to_key else [])))
+        object.__setattr__(
+            self,
+            "parent_primary_keys",
+            list(self.parent_primary_keys or ([self.parent_primary_key] if self.parent_primary_key else [])),
+        )
+        object.__setattr__(
+            self,
+            "child_foreign_keys",
+            list(self.child_foreign_keys or ([self.child_foreign_key] if self.child_foreign_key else [])),
+        )
+        object.__setattr__(self, "from_join_key", self.from_join_keys[0] if len(self.from_join_keys) == 1 else None)
+        object.__setattr__(self, "to_join_key", self.to_join_keys[0] if len(self.to_join_keys) == 1 else None)
+        object.__setattr__(self, "from_key", self.from_keys[0] if len(self.from_keys) == 1 else None)
+        object.__setattr__(self, "to_key", self.to_keys[0] if len(self.to_keys) == 1 else None)
+        object.__setattr__(self, "parent_primary_key", self.parent_primary_keys[0] if len(self.parent_primary_keys) == 1 else None)
+        object.__setattr__(self, "child_foreign_key", self.child_foreign_keys[0] if len(self.child_foreign_keys) == 1 else None)
+        object.__setattr__(self, "properties", dict(self.properties or {}))
 
     @classmethod
     def for_join_table(
@@ -55,6 +136,7 @@ class EdgeMapping:
             from_label=from_label,
             to_label=to_label,
             relationship_kind=RelationshipKind.JOIN_TABLE,
+            cardinality=Cardinality.MANY_TO_MANY,
             join_table=join_table,
             from_join_key=from_join_key,
             to_join_key=to_join_key,
@@ -73,6 +155,7 @@ class EdgeMapping:
             from_label=label,
             to_label=label,
             relationship_kind=RelationshipKind.SELF_REFERENTIAL,
+            cardinality=Cardinality.MANY_TO_ONE,
             from_key=from_key,
             to_key=to_key,
         )
@@ -91,6 +174,7 @@ class EdgeMapping:
             from_label=parent_label,
             to_label=child_label,
             relationship_kind=RelationshipKind.ONE_TO_MANY,
+            cardinality=Cardinality.ONE_TO_MANY,
             parent_primary_key=parent_primary_key,
             child_foreign_key=child_foreign_key,
         )
@@ -164,7 +248,14 @@ class SchemaDefinition:
                 NodeMapping(
                     label=_require_string(node, "label", "node"),
                     table=_require_string(node, "table", "node"),
-                    primary_key=_require_string(node, "primaryKey", "node"),
+                    primary_key=None,
+                    labels=_string_list(node.get("labels"), [_require_string(node, "label", "node")]),
+                    inherits=_string_list(node.get("inherits"), []),
+                    catalog=_optional_string(node.get("catalog")),
+                    schema=_optional_string(node.get("schema")),
+                    primary_keys=_string_list(_first_present(node, "primaryKeys", "primaryKey"), ["id"]),
+                    properties=_property_mappings(node.get("properties")),
+                    unique_keys=_nested_string_list(node.get("uniqueKeys")),
                 )
             )
         for idx, edge in enumerate(payload.get("edges", [])):
@@ -188,29 +279,57 @@ class SchemaDefinition:
 
 
 def _edge_mapping_from_payload(edge: dict, kind: RelationshipKind) -> EdgeMapping:
+    cardinality = Cardinality(edge["cardinality"]) if isinstance(edge.get("cardinality"), str) else None
+    unique = bool(edge.get("unique", False))
+    properties = _property_mappings(edge.get("properties"))
     if kind is RelationshipKind.JOIN_TABLE:
-        return EdgeMapping.for_join_table(
-            _require_string(edge, "type", "edge"),
-            _require_string(edge, "fromLabel", "edge"),
-            _require_string(edge, "toLabel", "edge"),
-            _require_string(edge, "joinTable", "edge"),
-            _require_string(edge, "fromJoinKey", "edge"),
-            _require_string(edge, "toJoinKey", "edge"),
+        return EdgeMapping(
+            type=_require_string(edge, "type", "edge"),
+            from_label=_require_string(edge, "fromLabel", "edge"),
+            to_label=_require_string(edge, "toLabel", "edge"),
+            relationship_kind=RelationshipKind.JOIN_TABLE,
+            cardinality=cardinality or Cardinality.MANY_TO_MANY,
+            unique=unique,
+            join_table=_require_string(edge, "joinTable", "edge"),
+            from_join_keys=_string_list(_first_present(edge, "fromJoinKeys", "fromJoinKey"), []),
+            to_join_keys=_string_list(_first_present(edge, "toJoinKeys", "toJoinKey"), []),
+            properties=properties,
         )
     if kind is RelationshipKind.SELF_REFERENTIAL:
-        return EdgeMapping.for_self_referential(
-            _require_string(edge, "type", "edge"),
-            _require_string(edge, "label", "edge"),
-            _require_string(edge, "fromKey", "edge"),
-            _require_string(edge, "toKey", "edge"),
+        return EdgeMapping(
+            type=_require_string(edge, "type", "edge"),
+            from_label=_require_string(edge, "label", "edge"),
+            to_label=_require_string(edge, "label", "edge"),
+            relationship_kind=RelationshipKind.SELF_REFERENTIAL,
+            cardinality=cardinality or Cardinality.MANY_TO_ONE,
+            unique=unique,
+            from_keys=_string_list(_first_present(edge, "fromKeys", "fromKey"), []),
+            to_keys=_string_list(_first_present(edge, "toKeys", "toKey"), []),
+            properties=properties,
         )
     if kind is RelationshipKind.ONE_TO_MANY:
-        return EdgeMapping.for_one_to_many(
-            _require_string(edge, "type", "edge"),
-            _require_string(edge, "parentLabel", "edge"),
-            _require_string(edge, "childLabel", "edge"),
-            _require_string(edge, "parentPrimaryKey", "edge"),
-            _require_string(edge, "childForeignKey", "edge"),
+        return EdgeMapping(
+            type=_require_string(edge, "type", "edge"),
+            from_label=_require_string(edge, "parentLabel", "edge"),
+            to_label=_require_string(edge, "childLabel", "edge"),
+            relationship_kind=RelationshipKind.ONE_TO_MANY,
+            cardinality=cardinality or Cardinality.ONE_TO_MANY,
+            unique=unique,
+            parent_primary_keys=_string_list(_first_present(edge, "parentPrimaryKeys", "parentPrimaryKey"), []),
+            child_foreign_keys=_string_list(_first_present(edge, "childForeignKeys", "childForeignKey"), []),
+            properties=properties,
+        )
+    if kind is RelationshipKind.MANY_TO_ONE:
+        return EdgeMapping(
+            type=_require_string(edge, "type", "edge"),
+            from_label=_require_string(edge, "fromLabel", "edge"),
+            to_label=_require_string(edge, "toLabel", "edge"),
+            relationship_kind=RelationshipKind.MANY_TO_ONE,
+            cardinality=cardinality or Cardinality.MANY_TO_ONE,
+            unique=unique,
+            parent_primary_keys=_string_list(_first_present(edge, "toPrimaryKeys", "toPrimaryKey"), []),
+            child_foreign_keys=_string_list(_first_present(edge, "fromForeignKeys", "fromForeignKey"), []),
+            properties=properties,
         )
     raise ValueError(f"Unknown relationship kind: {kind}")
 
@@ -230,6 +349,57 @@ def _require_string(payload: dict[str, Any], key: str, context: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"Schema {context} missing required string field: {key}")
     return value
+
+
+def _optional_string(value: Any) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _first_present(payload: dict[str, Any], primary_key: str, fallback_key: str) -> Any:
+    return payload[primary_key] if primary_key in payload else payload.get(fallback_key)
+
+
+def _string_list(raw: Any, default: list[str]) -> list[str]:
+    if raw is None:
+        return list(default)
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list) and all(isinstance(item, str) and item.strip() for item in raw):
+        return list(raw)
+    raise ValueError("Schema value must be a string or list of strings.")
+
+
+def _nested_string_list(raw: Any) -> list[list[str]]:
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError("Schema uniqueKeys must be a list.")
+    return [_string_list(item, []) for item in raw]
+
+
+def _property_mappings(raw: Any) -> dict[str, PropertyMapping]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("Schema properties must be a mapping.")
+    properties: dict[str, PropertyMapping] = {}
+    for prop, value in raw.items():
+        if not isinstance(prop, str) or not prop.strip():
+            raise ValueError("Schema property names must be non-blank strings.")
+        if isinstance(value, str):
+            properties[prop] = PropertyMapping(prop, value)
+            continue
+        if isinstance(value, dict):
+            properties[prop] = PropertyMapping(
+                property=prop,
+                column=_require_string(value, "column", "property"),
+                type=_optional_string(value.get("type")),
+                nullable=bool(value.get("nullable", True)),
+                quote=bool(value.get("quote", False)),
+            )
+            continue
+        raise ValueError("Schema property mapping must be a string or mapping.")
+    return properties
 
 
 def _simple_schema_yaml_load(raw: str) -> dict[str, Any]:
