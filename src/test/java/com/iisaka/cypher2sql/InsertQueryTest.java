@@ -1,6 +1,6 @@
 package com.iisaka.cypher2sql;
 
-import com.iisaka.cypher2sql.query.sql.BasicDialect;
+import com.iisaka.cypher2sql.query.sql.StandardGrammar;
 import com.iisaka.cypher2sql.query.sql.InsertQuery;
 import org.junit.jupiter.api.Test;
 
@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class SqlInsertTest {
+class InsertQueryTest {
     @Test
     void throwsBecauseWriteQueriesAreDisabled() {
         final InsertQuery insert = InsertQuery.into("people")
@@ -18,7 +18,7 @@ class SqlInsertTest {
 
         assertFalse(insert.isEmpty());
         final UnsupportedOperationException ex =
-                assertThrows(UnsupportedOperationException.class, () -> insert.render(new BasicDialect()));
+                assertThrows(UnsupportedOperationException.class, () -> insert.render(new StandardGrammar()));
         assertEquals(
                 "Write queries are disabled in read-only mode. InsertQuery is reserved for future enhancement.",
                 ex.getMessage());
@@ -30,7 +30,7 @@ class SqlInsertTest {
         assertTrue(insert.isEmpty());
 
         final UnsupportedOperationException ex =
-                assertThrows(UnsupportedOperationException.class, () -> insert.render(new BasicDialect()));
+                assertThrows(UnsupportedOperationException.class, () -> insert.render(new StandardGrammar()));
         assertEquals(
                 "Write queries are disabled in read-only mode. InsertQuery is reserved for future enhancement.",
                 ex.getMessage());

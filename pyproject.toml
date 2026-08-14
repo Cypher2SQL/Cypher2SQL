@@ -1,0 +1,17 @@
+[project]
+name = "cypher2sql"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "antlr4-python3-runtime",
+    "antlr4-cypher",
+    "PyYAML",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src/main/python"]
+testpaths = ["src/test/python/tests"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src/main/python"

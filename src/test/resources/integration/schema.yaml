@@ -1,0 +1,49 @@
+nodes:
+  - label: Person
+    table: people
+    primaryKey: id
+    properties:
+      id:
+        column: id
+        type: integer
+        nullable: false
+      name:
+        column: full_name
+        type: string
+        nullable: false
+      born:
+        column: birth_year
+        type: integer
+        nullable: true
+  - label: Movie
+    table: movies
+    primaryKey: id
+    properties:
+      id:
+        column: id
+        type: integer
+        nullable: false
+      title:
+        column: movie_title
+        type: string
+        nullable: false
+edges:
+  - type: ACTED_IN
+    kind: JOIN_TABLE
+    fromLabel: Person
+    toLabel: Movie
+    joinTable: people_movies
+    fromJoinKey: person_id
+    toJoinKey: movie_id
+    properties:
+      role:
+        column: character_name
+        type: string
+        nullable: false
+  - type: AUTHORED
+    kind: ONE_TO_MANY
+    parentLabel: Person
+    childLabel: Movie
+    parentPrimaryKey: id
+    childForeignKey: author_id
+    cardinality: ONE_TO_MANY

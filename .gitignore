@@ -2,4 +2,9 @@
 /built/
 .gradle/
 .idea/
+.claude/worktrees/
 __pycache__/
+.venv/
+.DS_Store
+*.iml
+*.pyc

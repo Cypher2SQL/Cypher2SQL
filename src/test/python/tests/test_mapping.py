@@ -3,7 +3,7 @@ import unittest
 from cypher2sql.cypher_query import Edge, Node, Pattern, Query, ReturnItem, Direction
 from cypher2sql.mapping import Mapping
 from cypher2sql.schema import EdgeMapping, NodeMapping, SchemaDefinition
-from cypher2sql.sql_query import BasicDialect
+from cypher2sql.sql_query import StandardGrammar
 
 
 class CypherSqlMappingTest(unittest.TestCase):
@@ -35,26 +35,100 @@ class CypherSqlMappingTest(unittest.TestCase):
 
     def test_renders_join_table(self) -> None:
         query = self._query("p", "Person", "ACTED_IN", "m", "Movie")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
             'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
             sql,
         )
 
+    def test_binds_to_read_query(self) -> None:
+        query = self._query("p", "Person", "ACTED_IN", "m", "Movie")
+        read_query = Mapping(self.schema).to_read_query(query)
+
+        self.assertEqual(1, read_query.pattern_count)
+        self.assertEqual("people", read_query.pattern_at(0).root.mapping.table)
+        self.assertEqual("t0", read_query.pattern_at(0).root.alias)
+        self.assertEqual(1, len(read_query.pattern_at(0).traversals))
+
+    def test_renders_single_node_match(self) -> None:
+        query = Query(
+            "MATCH (p:Person) RETURN p",
+            [Pattern(nodes=[Node("p", "Person")], edges=[])],
+            parse_tree=object(),
+            return_items=[ReturnItem("p")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
+        self.assertEqual('SELECT t0.* FROM "people" t0', sql)
+
+    def test_renders_join_table_rows_when_returning_edge_variable(self) -> None:
+        query = Query(
+            "MATCH ()-[r:ACTED_IN]->() RETURN r",
+            [
+                Pattern(
+                    nodes=[Node(None, "Person"), Node(None, "Movie")],
+                    edges=[Edge(variable="r", type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("r")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
+        self.assertEqual(
+            'SELECT j2.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
+            'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
+            sql,
+        )
+
+    def test_renders_foreign_key_columns_when_returning_edge_variable(self) -> None:
+        query = Query(
+            "MATCH (p:Person)-[r:AUTHORED]->(m:Movie) RETURN r",
+            [
+                Pattern(
+                    nodes=[Node("p", "Person"), Node("m", "Movie")],
+                    edges=[Edge(variable="r", type="AUTHORED", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("r")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
+        self.assertEqual(
+            'SELECT t1.author_id, t0.id FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id',
+            sql,
+        )
+
+    def test_renders_self_referential_columns_when_returning_edge_variable(self) -> None:
+        query = Query(
+            "MATCH ()-[r:MANAGES]->() RETURN r",
+            [
+                Pattern(
+                    nodes=[Node(None, "Person"), Node(None, "Person")],
+                    edges=[Edge(variable="r", type="MANAGES", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("r")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
+        self.assertEqual(
+            'SELECT t0.manager_id, t1.id FROM "people" t0 INNER JOIN "people" t1 ON t0.manager_id = t1.id',
+            sql,
+        )
+
     def test_renders_self_referential(self) -> None:
         query = self._query("p", "Person", "MANAGES", "m", "Person")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "people" t0 INNER JOIN "people" t1 ON t0.manager_id = t1.id', sql)
 
     def test_renders_one_to_many_parent_on_left(self) -> None:
         query = self._query("p", "Person", "AUTHORED", "m", "Movie")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id', sql)
 
     def test_renders_one_to_many_parent_on_right(self) -> None:
         query = self._query("m", "Movie", "AUTHORED", "p", "Person")
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "movies" t0 INNER JOIN "people" t1 ON t0.author_id = t1.id', sql)
 
     def test_raises_when_edge_labels_do_not_match(self) -> None:
@@ -75,20 +149,26 @@ class CypherSqlMappingTest(unittest.TestCase):
         ):
             Mapping(self.schema).to_sql(query)
 
-    def test_raises_for_multi_hop_traversal_placeholder(self) -> None:
+    def test_renders_explicit_multi_hop_traversal(self) -> None:
         pattern = Pattern(
             nodes=[Node("p", "Person"), Node("m", "Movie"), Node("o", "Person")],
             edges=[
-                Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT),
-                Edge(variable=None, type="ACTED_IN", direction=Direction.RIGHT_TO_LEFT),
+                Edge(variable=None, type="AUTHORED", direction=Direction.LEFT_TO_RIGHT),
+                Edge(variable=None, type="AUTHORED", direction=Direction.LEFT_TO_RIGHT),
             ],
         )
-        query = Query("MATCH (p)-[:ACTED_IN]->(m)<-[:ACTED_IN]-(o) RETURN p, m, o", [pattern], parse_tree=object())
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "Multi-hop traversals are not supported yet; traversal planning is a future enhancement.",
-        ):
-            Mapping(self.schema).to_sql(query)
+        query = Query(
+            "MATCH (p)-[:AUTHORED]->(m)-[:AUTHORED]->(o) RETURN p, m, o",
+            [pattern],
+            parse_tree=object(),
+            return_items=[ReturnItem("p"), ReturnItem("m"), ReturnItem("o")],
+        )
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
+        self.assertEqual(
+            'SELECT t0.*, t1.*, t2.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id '
+            'INNER JOIN "people" t2 ON t1.author_id = t2.id',
+            sql,
+        )
 
     def test_projects_return_properties(self) -> None:
         query = Query(
@@ -102,7 +182,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("p", "id"), ReturnItem("m", "id")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.id, t1.id FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
             'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
@@ -121,7 +201,7 @@ class CypherSqlMappingTest(unittest.TestCase):
             parse_tree=object(),
             return_items=[ReturnItem("p"), ReturnItem("m")],
         )
-        sql = Mapping(self.schema).to_sql(query).render(BasicDialect())
+        sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
             'SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "people_movies" j2 ON t0.id = j2.person_id '
             'INNER JOIN "movies" t1 ON j2.movie_id = t1.id',
@@ -142,6 +222,46 @@ class CypherSqlMappingTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "RETURN references unknown variable: x"):
             Mapping(self.schema).to_sql(query)
+
+    def test_respects_edge_direction_when_type_has_both_orientations(self) -> None:
+        schema = (
+            SchemaDefinition()
+            .add_node(NodeMapping("Person", "people", "id"))
+            .add_node(NodeMapping("Movie", "movies", "id"))
+            .add_edge(EdgeMapping.for_one_to_many("LINKED", "Person", "Movie", "id", "author_id"))
+            .add_edge(EdgeMapping.for_one_to_many("LINKED", "Movie", "Person", "id", "favorite_movie_id"))
+        )
+        left_to_right = Query(
+            "MATCH (p:Person)-[:LINKED]->(m:Movie) RETURN p, m",
+            [
+                Pattern(
+                    nodes=[Node("p", "Person"), Node("m", "Movie")],
+                    edges=[Edge(variable=None, type="LINKED", direction=Direction.LEFT_TO_RIGHT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("p"), ReturnItem("m")],
+        )
+        right_to_left = Query(
+            "MATCH (p:Person)<-[:LINKED]-(m:Movie) RETURN p, m",
+            [
+                Pattern(
+                    nodes=[Node("p", "Person"), Node("m", "Movie")],
+                    edges=[Edge(variable=None, type="LINKED", direction=Direction.RIGHT_TO_LEFT)],
+                )
+            ],
+            parse_tree=object(),
+            return_items=[ReturnItem("p"), ReturnItem("m")],
+        )
+
+        ltr_sql = Mapping(schema).to_sql(left_to_right).render(StandardGrammar())
+        rtl_sql = Mapping(schema).to_sql(right_to_left).render(StandardGrammar())
+
+        self.assertEqual('SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "movies" t1 ON t1.author_id = t0.id', ltr_sql)
+        self.assertEqual(
+            'SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "movies" t1 ON t0.favorite_movie_id = t1.id',
+            rtl_sql,
+        )
 
 
 if __name__ == "__main__":

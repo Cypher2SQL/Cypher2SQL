@@ -53,11 +53,7 @@ public final class Syntax {
         parser.removeErrorListeners();
         parser.addErrorListener(new CypherSyntaxErrorListener());
         final ParseTree parseTree = invokeEntryRule(parser);
-        final String[] ruleNames = parser.getRuleNames();
-        return new ParsedCypher(
-                parseTree,
-                Pattern.extract(ruleNames, parseTree),
-                ReturnItem.extract(ruleNames, parseTree));
+        return new ParsedCypher(parseTree, parser.getRuleNames());
     }
 
     public ParseTree parseTree(final String cypher) {
@@ -67,8 +63,7 @@ public final class Syntax {
     // Keeps parser internals local while exposing only parse-tree + domain projections.
     public record ParsedCypher(
             ParseTree parseTree,
-            List<Pattern> patterns,
-            List<ReturnItem> returnItems) {
+            String[] ruleNames) {
     }
 
     private Lexer instantiateLexer(final CharStream input) {

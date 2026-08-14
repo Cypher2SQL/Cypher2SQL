@@ -1,37 +1,75 @@
 nodes:
   - label: Person
+    labels: [Person, Employee]
+    inherits: [Entity]
+    schema: graph
     table: people
-    primaryKey: id
+    primaryKeys: [tenant_id, id]
+    properties:
+      id:
+        column: id
+        type: integer
+        nullable: false
+      name:
+        column: full_name
+        type: string
+        nullable: false
+      born:
+        column: birth_year
+        type: integer
+        nullable: true
+    uniqueKeys:
+      - [tenant_id, id]
   - label: Movie
+    schema: graph
     table: movies
-    primaryKey: id
+    primaryKeys: [tenant_id, id]
+    properties:
+      id:
+        column: id
+        type: integer
+        nullable: false
+      title:
+        column: movie_title
+        type: string
+        nullable: false
 edges:
   - type: ACTED_IN
     kind: JOIN_TABLE
     fromLabel: Person
     toLabel: Movie
-    joinTable: people_movies
-    fromJoinKey: person_id
-    toJoinKey: movie_id
+    joinTable: graph.people_movies
+    fromJoinKeys: [person_tenant_id, person_id]
+    toJoinKeys: [movie_tenant_id, movie_id]
+    cardinality: MANY_TO_MANY
+    properties:
+      role:
+        column: character_name
+        type: string
+        nullable: true
   - type: MANAGES
     kind: SELF_REFERENTIAL
     label: Person
     fromKey: manager_id
     toKey: id
+    cardinality: MANY_TO_ONE
   - type: AUTHORED
     kind: ONE_TO_MANY
     parentLabel: Person
     childLabel: Movie
-    parentPrimaryKey: id
-    childForeignKey: author_id
+    parentPrimaryKeys: [tenant_id, id]
+    childForeignKeys: [tenant_id, author_id]
+    cardinality: ONE_TO_MANY
   - type: DIRECTS
-    kind: ONE_TO_MANY
-    parentLabel: Person
-    childLabel: Movie
-    parentPrimaryKey: id
-    childForeignKey: director_id
+    kind: MANY_TO_ONE
+    fromLabel: Movie
+    toLabel: Person
+    fromForeignKeys: [tenant_id, director_id]
+    toPrimaryKeys: [tenant_id, id]
+    cardinality: MANY_TO_ONE
   - type: FRIENDS_WITH
     kind: SELF_REFERENTIAL
     label: Person
     fromKey: id
     toKey: friend_id
+    cardinality: MANY_TO_MANY
