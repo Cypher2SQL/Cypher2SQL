@@ -86,7 +86,7 @@ class IntegrationTest(unittest.TestCase):
     def test_parses_anonymous_nodes_around_relationship(self) -> None:
         query = Query.parse("MATCH ()-[r:ACTED_IN]->() RETURN r")
 
-        patterns = query.patterns
+        patterns = query.match_clauses[0].patterns
         self.assertEqual(1, len(patterns))
         self.assertEqual(2, len(patterns[0].nodes))
         self.assertIsNone(patterns[0].nodes[0].variable)
@@ -377,7 +377,7 @@ class IntegrationTest(unittest.TestCase):
         query = Query.parse("MATCH (p:Person) WITH p.id AS pid WHERE pid > 1 RETURN pid")
 
         self.assertTrue(query.has_with_clause)
-        self.assertEqual("pid", query.with_projection_items[0].alias)
+        self.assertEqual("pid", query.with_clause.items[0].alias)
         sql = Mapping(schema).to_sql(query).render(StandardGrammar())
 
         self.assertEqual(

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import builtins
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
+
+from .schema import EdgeMapping, SchemaDefinition
 
 try:
     from antlr4 import InputStream, CommonTokenStream
@@ -43,8 +45,122 @@ class Edge:
 class Pattern:
     nodes: list[Node]
     edges: list[Edge]
-    is_optional: bool = False
-    local_where_expression: Expression | None = None
+
+    def bind(
+        self,
+        schema: SchemaDefinition,
+        bound_by_variable: dict[str, Any],
+        next_alias_index: list[int],
+        is_optional: bool,
+        where_expression: "Expression | None",
+    ) -> Any:
+        from .read_query import BoundNode, BoundPattern, BoundTraversal  # local: avoids a cypher_query <-> read_query import cycle
+
+        substituted_nodes = _substitute_bound_labels(self.nodes, bound_by_variable)
+        nodes = _resolve_node_labels(schema, substituted_nodes, self.edges)
+        if not nodes:
+            raise ValueError("Cypher pattern contains no nodes.")
+
+        bound_nodes = []
+        for node in nodes:
+            existing = bound_by_variable.get(node.variable) if node.variable else None
+            if existing is not None:
+                bound_node = existing
+            else:
+                bound_node = BoundNode(node, schema.node_for_label(node.label), f"t{next_alias_index[0]}")
+                next_alias_index[0] += 1
+                if node.variable:
+                    bound_by_variable[node.variable] = bound_node
+            bound_nodes.append(bound_node)
+
+        traversals = [
+            BoundTraversal(
+                edge,
+                _resolve_relation(schema, edge, nodes[idx], nodes[idx + 1]),
+                bound_nodes[idx],
+                bound_nodes[idx + 1],
+            )
+            for idx, edge in enumerate(self.edges)
+        ]
+        return BoundPattern(bound_nodes, traversals, is_optional, where_expression)
+
+
+def _substitute_bound_labels(nodes: list[Node], bound_by_variable: dict[str, Any]) -> list[Node]:
+    substituted: list[Node] = []
+    for node in nodes:
+        existing = bound_by_variable.get(node.variable) if node.variable else None
+        if not node.label and existing is not None:
+            substituted.append(Node(variable=node.variable, label=existing.label))
+        else:
+            substituted.append(node)
+    return substituted
+
+
+def _resolve_node_labels(schema: SchemaDefinition, nodes: list[Node], edges: list[Edge]) -> list[Node]:
+    resolved: list[Node] = []
+    edge_mappings = [
+        _resolve_edge_mapping_for_inference(schema, edge, nodes[idx], nodes[idx + 1])
+        for idx, edge in enumerate(edges)
+    ]
+    for idx, node in enumerate(nodes):
+        if node.label:
+            resolved.append(node)
+            continue
+        inferred = None
+        if idx > 0:
+            prev_edge = edges[idx - 1]
+            prev_mapping = edge_mappings[idx - 1]
+            prev_candidate = prev_mapping.from_label if prev_edge.direction is Direction.RIGHT_TO_LEFT else prev_mapping.to_label
+            inferred = _merge_label(inferred, prev_candidate, idx)
+        if idx < len(edge_mappings):
+            next_edge = edges[idx]
+            next_mapping = edge_mappings[idx]
+            next_candidate = next_mapping.to_label if next_edge.direction is Direction.RIGHT_TO_LEFT else next_mapping.from_label
+            inferred = _merge_label(inferred, next_candidate, idx)
+        resolved.append(Node(variable=node.variable, label=inferred))
+    return resolved
+
+
+def _resolve_edge_mapping_for_inference(schema: SchemaDefinition, edge: Edge, left: Node, right: Node) -> EdgeMapping:
+    has_left = bool(left.label)
+    has_right = bool(right.label)
+    if not has_left or not has_right:
+        return schema.edge_for_type(edge.type)
+    if edge.direction is Direction.LEFT_TO_RIGHT:
+        return _edge_for_directed_labels_or_fallback(schema, edge.type, left.label, right.label)
+    if edge.direction is Direction.RIGHT_TO_LEFT:
+        return _edge_for_directed_labels_or_fallback(schema, edge.type, right.label, left.label)
+    return schema.edge_for_type_undirected(edge.type, left.label, right.label)
+
+
+def _merge_label(current: str | None, candidate: str | None, node_index: int) -> str | None:
+    if not candidate:
+        return current
+    if current is None:
+        return candidate
+    if current != candidate:
+        raise ValueError(f"Unable to infer unique label for anonymous node at index {node_index}")
+    return current
+
+
+def _resolve_relation(schema: SchemaDefinition, edge: Edge, left: Node, right: Node) -> EdgeMapping:
+    if edge.direction is Direction.LEFT_TO_RIGHT:
+        return _edge_for_directed_labels_or_fallback(schema, edge.type, left.label, right.label)
+    if edge.direction is Direction.RIGHT_TO_LEFT:
+        return _edge_for_directed_labels_or_fallback(schema, edge.type, right.label, left.label)
+    return schema.edge_for_type_undirected(edge.type, left.label, right.label)
+
+
+def _edge_for_directed_labels_or_fallback(
+    schema: SchemaDefinition, type: str, from_label: str | None, to_label: str | None
+) -> EdgeMapping:
+    try:
+        return schema.edge_for_type_with_labels(type, from_label, to_label)
+    except ValueError as directed_missing:
+        try:
+            return schema.edge_for_type(type)
+        except ValueError:
+            raise ValueError(f"Edge mapping labels do not match nodes: {type}") from directed_missing
 
 
 @dataclass(frozen=True)
@@ -125,158 +241,152 @@ class OrderItem:
     descending: bool
 
 
+def _normalize_projection_items(items: list[ReturnItem | ProjectionItem]) -> list[ProjectionItem]:
+    return [item if isinstance(item, ProjectionItem) else ProjectionItem(item.expression, item.alias) for item in items]
+
+
+@dataclass(frozen=True)
+class MatchClause:
+    patterns: list[Pattern]
+    is_optional: bool = False
+    where_expression: Expression | None = None
+    parse_tree_node: Any = None
+
+    def bind(self, schema: SchemaDefinition, bound_by_variable: dict[str, Any], next_alias_index: list[int]) -> list[Any]:
+        return [
+            pattern.bind(schema, bound_by_variable, next_alias_index, self.is_optional, self.where_expression)
+            for pattern in self.patterns
+        ]
+
+
+_AGGREGATE_FUNCTIONS = {"count", "sum", "avg", "min", "max"}
+
+
+def _is_aggregate(expression: Expression) -> bool:
+    if isinstance(expression, FunctionExpression):
+        return expression.name.lower() in _AGGREGATE_FUNCTIONS or any(_is_aggregate(arg) for arg in expression.arguments)
+    if isinstance(expression, PropertyExpression):
+        return _is_aggregate(expression.receiver)
+    if isinstance(expression, BinaryExpression):
+        return _is_aggregate(expression.left) or _is_aggregate(expression.right)
+    if isinstance(expression, UnaryExpression):
+        return _is_aggregate(expression.operand)
+    if isinstance(expression, CaseExpression):
+        return (
+            (expression.subject is not None and _is_aggregate(expression.subject))
+            or any(_is_aggregate(when) or _is_aggregate(then) for when, then in expression.when_thens)
+            or (expression.else_expression is not None and _is_aggregate(expression.else_expression))
+        )
+    return False
+
+
+@dataclass(frozen=True)
+class WithClause:
+    items: list[ProjectionItem]
+    distinct: bool = False
+    order_items: list[OrderItem] = field(default_factory=list)
+    skip: int | None = None
+    limit: int | None = None
+    where_expression: Expression | None = None
+    parse_tree_node: Any = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", _normalize_projection_items(self.items))
+
+    def has_mixed_aggregation(self) -> bool:
+        any_aggregate = any(_is_aggregate(item.expression) for item in self.items)
+        any_non_aggregate = any(not _is_aggregate(item.expression) for item in self.items)
+        return any_aggregate and any_non_aggregate
+
+
+@dataclass(frozen=True)
+class ReturnClause:
+    items: list[ProjectionItem]
+    distinct: bool = False
+    order_items: list[OrderItem] = field(default_factory=list)
+    skip: int | None = None
+    limit: int | None = None
+    parse_tree_node: Any = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "items", _normalize_projection_items(self.items))
+
+
+Clause = MatchClause | WithClause | ReturnClause
+
+
 class Query:
     def __init__(
         self,
         raw: str,
-        patterns: list[Pattern],
+        clauses: list[Clause],
         parse_tree: Any,
-        return_items: list[ReturnItem | ProjectionItem] | None = None,
-        where_expression: Expression | None = None,
-        with_projection_items: list[ProjectionItem] | None = None,
-        with_where_expression: Expression | None = None,
         has_variable_length_traversal: bool | None = None,
-        order_items: list[OrderItem] | None = None,
-        skip: int | None = None,
-        limit: int | None = None,
-        distinct: bool = False,
-        with_distinct: bool = False,
-        with_order_items: list[OrderItem] | None = None,
-        with_skip: int | None = None,
-        with_limit: int | None = None,
-        has_multiple_with_clauses: bool = False,
-        has_match_after_with: bool = False,
     ) -> None:
         self._raw = raw
-        self._patterns = list(patterns)
+        self._clauses = list(clauses)
         self._parse_tree = parse_tree
-        self._return_items = [
-            item if isinstance(item, ProjectionItem) else ProjectionItem(item.expression, item.alias)
-            for item in ([] if return_items is None else list(return_items))
-        ]
-        self._where_expression = where_expression
-        self._with_projection_items = [] if with_projection_items is None else list(with_projection_items)
-        self._with_where_expression = with_where_expression
         self._has_variable_length_traversal = (
             ("[*" in raw) if has_variable_length_traversal is None else has_variable_length_traversal
         )
-        self._order_items = [] if order_items is None else list(order_items)
-        self._skip = skip
-        self._limit = limit
-        self._distinct = distinct
-        self._with_distinct = with_distinct
-        self._with_order_items = [] if with_order_items is None else list(with_order_items)
-        self._with_skip = with_skip
-        self._with_limit = with_limit
-        self._has_multiple_with_clauses = has_multiple_with_clauses
-        self._has_match_after_with = has_match_after_with
 
     @property
     def raw(self) -> str:
         return self._raw
 
     @property
-    def patterns(self) -> list[Pattern]:
-        return list(self._patterns)
+    def clauses(self) -> list[Clause]:
+        return list(self._clauses)
 
     @property
     def parse_tree(self) -> Any:
         return self._parse_tree
 
     @property
-    def return_items(self) -> list[ProjectionItem]:
-        return list(self._return_items)
-
-    @property
-    def projection_items(self) -> list[ProjectionItem]:
-        return list(self._return_items)
-
-    @property
-    def where_expression(self) -> Expression | None:
-        return self._where_expression
-
-    @property
-    def with_projection_items(self) -> list[ProjectionItem]:
-        return list(self._with_projection_items)
-
-    @property
-    def with_where_expression(self) -> Expression | None:
-        return self._with_where_expression
-
-    @property
-    def has_with_clause(self) -> bool:
-        return bool(self._with_projection_items) or self._with_where_expression is not None
-
-    @property
     def has_variable_length_traversal(self) -> bool:
         return self._has_variable_length_traversal
 
     @property
-    def order_items(self) -> list[OrderItem]:
-        return list(self._order_items)
+    def match_clauses(self) -> list[MatchClause]:
+        return [clause for clause in self._clauses if isinstance(clause, MatchClause)]
 
     @property
-    def skip(self) -> int | None:
-        return self._skip
+    def with_clause(self) -> WithClause | None:
+        for clause in self._clauses:
+            if isinstance(clause, WithClause):
+                return clause
+        return None
 
     @property
-    def limit(self) -> int | None:
-        return self._limit
+    def has_with_clause(self) -> bool:
+        return self.with_clause is not None
 
     @property
-    def distinct(self) -> bool:
-        return self._distinct
-
-    @property
-    def with_distinct(self) -> bool:
-        return self._with_distinct
-
-    @property
-    def with_order_items(self) -> list[OrderItem]:
-        return list(self._with_order_items)
-
-    @property
-    def with_skip(self) -> int | None:
-        return self._with_skip
-
-    @property
-    def with_limit(self) -> int | None:
-        return self._with_limit
+    def return_clause(self) -> ReturnClause:
+        for clause in self._clauses:
+            if isinstance(clause, ReturnClause):
+                return clause
+        return ReturnClause(items=[])
 
     @property
     def has_multiple_with_clauses(self) -> bool:
-        return self._has_multiple_with_clauses
+        return sum(1 for clause in self._clauses if isinstance(clause, WithClause)) > 1
 
     @property
     def has_match_after_with(self) -> bool:
-        return self._has_match_after_with
+        saw_with = False
+        for clause in self._clauses:
+            if isinstance(clause, WithClause):
+                saw_with = True
+            elif isinstance(clause, MatchClause) and saw_with:
+                return True
+        return False
 
     @classmethod
     def parse(cls, cypher: str) -> "Query":
         parse_tree, parser = _parse(cypher)
-        patterns = _extract_patterns(parser, parse_tree)
-        return_projection_body = _projection_body(parser, parse_tree)
-        with_projection_body = _with_projection_body(parser, parse_tree)
-        return cls(
-            cypher,
-            patterns,
-            parse_tree,
-            _extract_projection_items(parser, parse_tree, in_with=False),
-            patterns[0].local_where_expression if patterns else None,
-            _extract_projection_items(parser, parse_tree, in_with=True),
-            _extract_with_where_expression(parser, parse_tree),
-            _has_variable_length_traversal(parser, parse_tree),
-            _extract_order_items(return_projection_body),
-            _extract_skip(return_projection_body),
-            _extract_limit(return_projection_body),
-            _extract_distinct(return_projection_body),
-            _extract_distinct(with_projection_body),
-            _extract_order_items(with_projection_body),
-            _extract_skip(with_projection_body),
-            _extract_limit(with_projection_body),
-            _has_multiple_with_clauses(parser, parse_tree),
-            _has_match_after_with(parser, parse_tree),
-        )
+        clauses = _extract_clauses(parser, parse_tree)
+        return cls(cypher, clauses, parse_tree, _has_variable_length_traversal(parser, parse_tree))
 
 
 class _CypherSyntaxErrorListener(ErrorListener):
@@ -303,58 +413,21 @@ def _parse(cypher: str) -> tuple[Any, Any]:
     raise RuntimeError("No supported Cypher entry rule found on parser.")
 
 
-def _extract_projection_items(parser: Any, parse_tree: Any, in_with: bool) -> list[ProjectionItem]:
-    return_items: list[ProjectionItem] = []
-    stack: list[Any] = [parse_tree]
+def _extract_projection_items(parser: Any, scope: Any) -> list[ProjectionItem]:
+    if scope is None:
+        return []
+    items: list[ProjectionItem] = []
+    stack: list[Any] = [scope]
     while stack:
         current = stack.pop()
         rule_name = _rule_name(parser, current)
-        if rule_name is not None and _is_projection_item_rule(rule_name) and _is_with_context(current) == in_with:
+        if rule_name is not None and _is_projection_item_rule(rule_name):
             expr, alias = _projection_expression_and_alias(current)
-            return_items.append(ProjectionItem(parse_expression(expr), alias))
+            items.append(ProjectionItem(parse_expression(expr), alias))
         child_count = getattr(current, "getChildCount", lambda: 0)()
         for idx in range(child_count - 1, -1, -1):
             stack.append(current.getChild(idx))
-    return return_items
-
-
-def _extract_with_where_expression(parser: Any, parse_tree: Any) -> Expression | None:
-    with_st = _find_first_by_rule_name(parser, parse_tree, "withSt")
-    if with_st is None or with_st.where() is None:
-        return None
-    return parse_expression(with_st.where().expression().getText())
-
-
-def _find_first_by_rule_name(parser: Any, parse_tree: Any, rule_name: str) -> Any:
-    matches = _find_all_by_rule_name(parser, parse_tree, rule_name)
-    return matches[0] if matches else None
-
-
-def _projection_body(parser: Any, parse_tree: Any) -> Any:
-    return_st = _find_first_by_rule_name(parser, parse_tree, "returnSt")
-    if return_st is None:
-        return None
-    return return_st.projectionBody()
-
-
-def _with_projection_body(parser: Any, parse_tree: Any) -> Any:
-    with_st = _find_first_by_rule_name(parser, parse_tree, "withSt")
-    if with_st is None:
-        return None
-    return with_st.projectionBody()
-
-
-def _has_multiple_with_clauses(parser: Any, parse_tree: Any) -> bool:
-    return len(_find_all_by_rule_name(parser, parse_tree, "withSt")) > 1
-
-
-def _has_match_after_with(parser: Any, parse_tree: Any) -> bool:
-    with_st = _find_first_by_rule_name(parser, parse_tree, "withSt")
-    if with_st is None:
-        return False
-    with_index = with_st.start.tokenIndex
-    match_clauses = _find_all_by_rule_name(parser, parse_tree, "matchSt")
-    return any(match_clause.start.tokenIndex > with_index for match_clause in match_clauses)
+    return items
 
 
 def _extract_order_items(projection_body: Any) -> list[OrderItem]:
@@ -389,44 +462,83 @@ def _require_integer_literal(expression: Expression, clause: str) -> int:
     raise NotImplementedError(f"{clause} must be an integer literal; parameters are not supported yet.")
 
 
-def _extract_patterns(parser: Any, parse_tree: Any) -> list[Pattern]:
-    match_clauses = _find_all_by_rule_name(parser, parse_tree, "matchSt")
-    patterns: list[Pattern] = []
-    for match_clause in match_clauses:
-        optional = match_clause.OPTIONAL() is not None
-        pattern_where = match_clause.patternWhere()
-        where_ctx = pattern_where.where() if pattern_where is not None else None
-        local_where_expression = (
-            parse_expression(where_ctx.expression().getText()) if where_ctx is not None else None
-        )
-        pattern_ctx = pattern_where.pattern() if pattern_where is not None else None
-        roots = _find_pattern_elements(parser, pattern_ctx) if pattern_ctx is not None else []
-        for root in roots:
-            node_contexts: list[Any] = []
-            relationship_contexts: list[Any] = []
-            stack: list[Any] = [root]
-            while stack:
-                current = stack.pop()
-                rule_name = _rule_name(parser, current)
-                if rule_name == "nodePattern":
-                    node_contexts.append(current)
-                elif rule_name == "relationshipPattern":
-                    relationship_contexts.append(current)
-                child_count = getattr(current, "getChildCount", lambda: 0)()
-                for idx in range(child_count - 1, -1, -1):
-                    stack.append(current.getChild(idx))
-            if not node_contexts:
-                continue
+def _extract_clauses(parser: Any, parse_tree: Any) -> list[Clause]:
+    clauses: list[Clause] = []
+    stack: list[Any] = [parse_tree]
+    while stack:
+        current = stack.pop()
+        rule_name = _rule_name(parser, current)
+        if rule_name == "matchSt":
+            clauses.append(_to_match_clause(parser, current))
+        elif rule_name == "withSt":
+            clauses.append(_to_with_clause(parser, current))
+        elif rule_name == "returnSt":
+            clauses.append(_to_return_clause(parser, current))
+        child_count = getattr(current, "getChildCount", lambda: 0)()
+        for idx in range(child_count - 1, -1, -1):
+            stack.append(current.getChild(idx))
+    return clauses
 
-            nodes = [_parse_node_text(ctx.getText()) for ctx in node_contexts]
-            edges = [_parse_edge_text(ctx.getText()) for ctx in relationship_contexts]
-            patterns.append(Pattern(
-                nodes=nodes,
-                edges=edges,
-                is_optional=optional,
-                local_where_expression=local_where_expression,
-            ))
-    return patterns
+
+def _to_match_clause(parser: Any, match_st: Any) -> MatchClause:
+    optional = match_st.OPTIONAL() is not None
+    pattern_where = match_st.patternWhere()
+    where_ctx = pattern_where.where() if pattern_where is not None else None
+    where_expression = parse_expression(where_ctx.expression().getText()) if where_ctx is not None else None
+    pattern_ctx = pattern_where.pattern() if pattern_where is not None else None
+    roots = _find_pattern_elements(parser, pattern_ctx) if pattern_ctx is not None else []
+
+    patterns: list[Pattern] = []
+    for root in roots:
+        node_contexts: list[Any] = []
+        relationship_contexts: list[Any] = []
+        stack: list[Any] = [root]
+        while stack:
+            current = stack.pop()
+            rule_name = _rule_name(parser, current)
+            if rule_name == "nodePattern":
+                node_contexts.append(current)
+            elif rule_name == "relationshipPattern":
+                relationship_contexts.append(current)
+            child_count = getattr(current, "getChildCount", lambda: 0)()
+            for idx in range(child_count - 1, -1, -1):
+                stack.append(current.getChild(idx))
+        if not node_contexts:
+            continue
+
+        nodes = [_parse_node_text(ctx.getText()) for ctx in node_contexts]
+        edges = [_parse_edge_text(ctx.getText()) for ctx in relationship_contexts]
+        patterns.append(Pattern(nodes=nodes, edges=edges))
+
+    return MatchClause(patterns=patterns, is_optional=optional, where_expression=where_expression, parse_tree_node=match_st)
+
+
+def _to_with_clause(parser: Any, with_st: Any) -> WithClause:
+    projection_body = with_st.projectionBody()
+    where_expression = (
+        parse_expression(with_st.where().expression().getText()) if with_st.where() is not None else None
+    )
+    return WithClause(
+        items=_extract_projection_items(parser, projection_body.projectionItems() if projection_body else None),
+        distinct=_extract_distinct(projection_body),
+        order_items=_extract_order_items(projection_body),
+        skip=_extract_skip(projection_body),
+        limit=_extract_limit(projection_body),
+        where_expression=where_expression,
+        parse_tree_node=with_st,
+    )
+
+
+def _to_return_clause(parser: Any, return_st: Any) -> ReturnClause:
+    projection_body = return_st.projectionBody()
+    return ReturnClause(
+        items=_extract_projection_items(parser, projection_body.projectionItems() if projection_body else None),
+        distinct=_extract_distinct(projection_body),
+        order_items=_extract_order_items(projection_body),
+        skip=_extract_skip(projection_body),
+        limit=_extract_limit(projection_body),
+        parse_tree_node=return_st,
+    )
 
 
 def _find_pattern_elements(parser: Any, parse_tree: Any) -> list[Any]:
@@ -441,19 +553,6 @@ def _find_pattern_elements(parser: Any, parse_tree: Any) -> list[Any]:
         for idx in range(child_count - 1, -1, -1):
             stack.append(current.getChild(idx))
     return roots
-
-
-def _find_all_by_rule_name(parser: Any, parse_tree: Any, rule_name: str) -> list[Any]:
-    matches: list[Any] = []
-    stack: list[Any] = [parse_tree]
-    while stack:
-        current = stack.pop()
-        if _rule_name(parser, current) == rule_name:
-            matches.append(current)
-        child_count = getattr(current, "getChildCount", lambda: 0)()
-        for idx in range(child_count - 1, -1, -1):
-            stack.append(current.getChild(idx))
-    return matches
 
 
 def _rule_name(parser: Any, context: Any) -> str | None:
@@ -484,17 +583,6 @@ def _projection_expression_and_alias(context: Any) -> tuple[str, str | None]:
     if saw_as:
         return "".join(before_alias).strip(), "".join(after_alias).strip() or None
     return context.getText().strip(), None
-
-
-def _is_with_context(context: Any) -> bool:
-    current = getattr(context, "parentCtx", None) or getattr(context, "parent", None)
-    while current is not None:
-        name = type(current).__name__.lower()
-        text = getattr(current, "getText", lambda: "")()
-        if "with" in name or text.upper().startswith("WITH"):
-            return True
-        current = getattr(current, "parentCtx", None) or getattr(current, "parent", None)
-    return False
 
 
 def _normalized_rule_name(rule_name: str) -> str:

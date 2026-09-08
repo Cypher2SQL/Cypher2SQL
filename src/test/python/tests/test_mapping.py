@@ -1,6 +1,18 @@
 import unittest
 
-from cypher2sql.cypher_query import Edge, Node, Pattern, ProjectionItem, Query, ReturnItem, Direction, VariableExpression
+from cypher2sql.cypher_query import (
+    Edge,
+    MatchClause,
+    Node,
+    Pattern,
+    ProjectionItem,
+    Query,
+    ReturnClause,
+    ReturnItem,
+    Direction,
+    VariableExpression,
+    WithClause,
+)
 from cypher2sql.mapping import Mapping
 from cypher2sql.schema import EdgeMapping, NodeMapping, SchemaDefinition
 from cypher2sql.sql_query import StandardGrammar
@@ -31,7 +43,14 @@ class CypherSqlMappingTest(unittest.TestCase):
             nodes=[Node(left_var, left_label), Node(right_var, right_label)],
             edges=[Edge(variable=None, type=rel_type, direction=Direction.LEFT_TO_RIGHT)],
         )
-        return Query("MATCH ...", [pattern], parse_tree=object())
+        return Query("MATCH ...", [MatchClause(patterns=[pattern])], parse_tree=object())
+
+    def _query_with_return(self, raw: str, pattern: Pattern, return_items: list[ReturnItem]) -> Query:
+        return Query(
+            raw,
+            [MatchClause(patterns=[pattern]), ReturnClause(items=return_items)],
+            parse_tree=object(),
+        )
 
     def test_renders_join_table(self) -> None:
         query = self._query("p", "Person", "ACTED_IN", "m", "Movie")
@@ -52,26 +71,22 @@ class CypherSqlMappingTest(unittest.TestCase):
         self.assertEqual(1, len(read_query.pattern_at(0).traversals))
 
     def test_renders_single_node_match(self) -> None:
-        query = Query(
+        query = self._query_with_return(
             "MATCH (p:Person) RETURN p",
-            [Pattern(nodes=[Node("p", "Person")], edges=[])],
-            parse_tree=object(),
-            return_items=[ReturnItem("p")],
+            Pattern(nodes=[Node("p", "Person")], edges=[]),
+            [ReturnItem("p")],
         )
         sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual('SELECT t0.* FROM "people" t0', sql)
 
     def test_renders_join_table_rows_when_returning_edge_variable(self) -> None:
-        query = Query(
+        query = self._query_with_return(
             "MATCH ()-[r:ACTED_IN]->() RETURN r",
-            [
-                Pattern(
-                    nodes=[Node(None, "Person"), Node(None, "Movie")],
-                    edges=[Edge(variable="r", type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("r")],
+            Pattern(
+                nodes=[Node(None, "Person"), Node(None, "Movie")],
+                edges=[Edge(variable="r", type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+            ),
+            [ReturnItem("r")],
         )
         sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
@@ -81,16 +96,13 @@ class CypherSqlMappingTest(unittest.TestCase):
         )
 
     def test_renders_foreign_key_columns_when_returning_edge_variable(self) -> None:
-        query = Query(
+        query = self._query_with_return(
             "MATCH (p:Person)-[r:AUTHORED]->(m:Movie) RETURN r",
-            [
-                Pattern(
-                    nodes=[Node("p", "Person"), Node("m", "Movie")],
-                    edges=[Edge(variable="r", type="AUTHORED", direction=Direction.LEFT_TO_RIGHT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("r")],
+            Pattern(
+                nodes=[Node("p", "Person"), Node("m", "Movie")],
+                edges=[Edge(variable="r", type="AUTHORED", direction=Direction.LEFT_TO_RIGHT)],
+            ),
+            [ReturnItem("r")],
         )
         sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
@@ -99,16 +111,13 @@ class CypherSqlMappingTest(unittest.TestCase):
         )
 
     def test_renders_self_referential_columns_when_returning_edge_variable(self) -> None:
-        query = Query(
+        query = self._query_with_return(
             "MATCH ()-[r:MANAGES]->() RETURN r",
-            [
-                Pattern(
-                    nodes=[Node(None, "Person"), Node(None, "Person")],
-                    edges=[Edge(variable="r", type="MANAGES", direction=Direction.LEFT_TO_RIGHT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("r")],
+            Pattern(
+                nodes=[Node(None, "Person"), Node(None, "Person")],
+                edges=[Edge(variable="r", type="MANAGES", direction=Direction.LEFT_TO_RIGHT)],
+            ),
+            [ReturnItem("r")],
         )
         sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
@@ -157,11 +166,10 @@ class CypherSqlMappingTest(unittest.TestCase):
                 Edge(variable=None, type="AUTHORED", direction=Direction.LEFT_TO_RIGHT),
             ],
         )
-        query = Query(
+        query = self._query_with_return(
             "MATCH (p)-[:AUTHORED]->(m)-[:AUTHORED]->(o) RETURN p, m, o",
-            [pattern],
-            parse_tree=object(),
-            return_items=[ReturnItem("p"), ReturnItem("m"), ReturnItem("o")],
+            pattern,
+            [ReturnItem("p"), ReturnItem("m"), ReturnItem("o")],
         )
         sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
@@ -171,16 +179,13 @@ class CypherSqlMappingTest(unittest.TestCase):
         )
 
     def test_projects_return_properties(self) -> None:
-        query = Query(
+        query = self._query_with_return(
             "MATCH ... RETURN p.id, m.id",
-            [
-                Pattern(
-                    nodes=[Node("p", "Person"), Node("m", "Movie")],
-                    edges=[Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("p", "id"), ReturnItem("m", "id")],
+            Pattern(
+                nodes=[Node("p", "Person"), Node("m", "Movie")],
+                edges=[Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+            ),
+            [ReturnItem("p", "id"), ReturnItem("m", "id")],
         )
         sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
@@ -190,16 +195,13 @@ class CypherSqlMappingTest(unittest.TestCase):
         )
 
     def test_projects_return_variables(self) -> None:
-        query = Query(
+        query = self._query_with_return(
             "MATCH ... RETURN p, m",
-            [
-                Pattern(
-                    nodes=[Node("p", "Person"), Node("m", "Movie")],
-                    edges=[Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("p"), ReturnItem("m")],
+            Pattern(
+                nodes=[Node("p", "Person"), Node("m", "Movie")],
+                edges=[Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+            ),
+            [ReturnItem("p"), ReturnItem("m")],
         )
         sql = Mapping(self.schema).to_sql(query).render(StandardGrammar())
         self.assertEqual(
@@ -209,16 +211,13 @@ class CypherSqlMappingTest(unittest.TestCase):
         )
 
     def test_raises_for_unknown_return_variable(self) -> None:
-        query = Query(
+        query = self._query_with_return(
             "MATCH ... RETURN x.id",
-            [
-                Pattern(
-                    nodes=[Node("p", "Person"), Node("m", "Movie")],
-                    edges=[Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("x", "id")],
+            Pattern(
+                nodes=[Node("p", "Person"), Node("m", "Movie")],
+                edges=[Edge(variable=None, type="ACTED_IN", direction=Direction.LEFT_TO_RIGHT)],
+            ),
+            [ReturnItem("x", "id")],
         )
         with self.assertRaisesRegex(ValueError, "RETURN references unknown variable: x"):
             Mapping(self.schema).to_sql(query)
@@ -231,27 +230,21 @@ class CypherSqlMappingTest(unittest.TestCase):
             .add_edge(EdgeMapping.for_one_to_many("LINKED", "Person", "Movie", "id", "author_id"))
             .add_edge(EdgeMapping.for_one_to_many("LINKED", "Movie", "Person", "id", "favorite_movie_id"))
         )
-        left_to_right = Query(
+        left_to_right = self._query_with_return(
             "MATCH (p:Person)-[:LINKED]->(m:Movie) RETURN p, m",
-            [
-                Pattern(
-                    nodes=[Node("p", "Person"), Node("m", "Movie")],
-                    edges=[Edge(variable=None, type="LINKED", direction=Direction.LEFT_TO_RIGHT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("p"), ReturnItem("m")],
+            Pattern(
+                nodes=[Node("p", "Person"), Node("m", "Movie")],
+                edges=[Edge(variable=None, type="LINKED", direction=Direction.LEFT_TO_RIGHT)],
+            ),
+            [ReturnItem("p"), ReturnItem("m")],
         )
-        right_to_left = Query(
+        right_to_left = self._query_with_return(
             "MATCH (p:Person)<-[:LINKED]-(m:Movie) RETURN p, m",
-            [
-                Pattern(
-                    nodes=[Node("p", "Person"), Node("m", "Movie")],
-                    edges=[Edge(variable=None, type="LINKED", direction=Direction.RIGHT_TO_LEFT)],
-                )
-            ],
-            parse_tree=object(),
-            return_items=[ReturnItem("p"), ReturnItem("m")],
+            Pattern(
+                nodes=[Node("p", "Person"), Node("m", "Movie")],
+                edges=[Edge(variable=None, type="LINKED", direction=Direction.RIGHT_TO_LEFT)],
+            ),
+            [ReturnItem("p"), ReturnItem("m")],
         )
 
         ltr_sql = Mapping(schema).to_sql(left_to_right).render(StandardGrammar())
@@ -268,10 +261,13 @@ class CypherSqlMappingTest(unittest.TestCase):
         # supports a single WITH per query, so this can't be constructed via Query.parse.
         query = Query(
             "MATCH (p:Person) WITH p AS p1 ... WITH p1 AS p2 RETURN p2",
-            [Pattern(nodes=[Node("p", "Person")], edges=[])],
+            [
+                MatchClause(patterns=[Pattern(nodes=[Node("p", "Person")], edges=[])]),
+                WithClause(items=[ProjectionItem(VariableExpression("p"), "p1")]),
+                WithClause(items=[ProjectionItem(VariableExpression("p1"), "p2")]),
+                ReturnClause(items=[ReturnItem("p2")]),
+            ],
             parse_tree=object(),
-            with_projection_items=[ProjectionItem(VariableExpression("p"), "p1")],
-            has_multiple_with_clauses=True,
         )
 
         with self.assertRaises(NotImplementedError) as context:
