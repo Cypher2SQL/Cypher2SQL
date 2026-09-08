@@ -34,7 +34,9 @@ class JoinClause:
 @dataclass
 class SelectQuery(Renderable):
     select_columns: list[str] = field(default_factory=list)
+    distinct: bool = False
     from_table: str | None = None
+    from_subquery: SelectQuery | None = None
     from_alias: str | None = None
     joins: list[JoinClause] = field(default_factory=list)
     where_clauses: list[str] = field(default_factory=list)
@@ -55,12 +57,30 @@ class SelectQuery(Renderable):
         select.select_columns.append(f"{alias}.*")
         return select
 
+    @classmethod
+    def from_subquery_select(cls, subquery: SelectQuery, alias: str) -> Self:
+        select = cls()
+        select.from_subquery = subquery
+        select.from_alias = alias
+        return select
+
     def add_select_column(self, column: str) -> Self:
         self.select_columns.append(column)
         return self
 
+    def set_distinct(self) -> Self:
+        self.distinct = True
+        return self
+
     def add_join(self, join: JoinClause) -> Self:
         self.joins.append(join)
+        return self
+
+    def and_last_join_condition(self, extra_condition: str) -> Self:
+        if not self.joins:
+            raise ValueError("No join to amend.")
+        last = self.joins[-1]
+        self.joins[-1] = JoinClause(last.join_type, last.table, last.alias, f"{last.on_condition} AND ({extra_condition})")
         return self
 
     def add_where(self, clause: str) -> Self:
@@ -80,8 +100,12 @@ class SelectQuery(Renderable):
         return self
 
     def render(self, grammar: Grammar) -> str:
-        select_clause = "SELECT " + ", ".join(self.select_columns)
-        from_clause = f"FROM {grammar.quote_identifier(self.from_table)} {self.from_alias}"
+        select_clause = ("SELECT DISTINCT " if self.distinct else "SELECT ") + ", ".join(self.select_columns)
+        from_clause = (
+            f"FROM ({self.from_subquery.render(grammar)}) {self.from_alias}"
+            if self.from_subquery is not None
+            else f"FROM {grammar.quote_identifier(self.from_table)} {self.from_alias}"
+        )
         join_clause = " ".join(
             f"{join.join_type.value} JOIN {grammar.quote_identifier(join.table)} {join.alias} ON {join.on_condition}"
             for join in self.joins

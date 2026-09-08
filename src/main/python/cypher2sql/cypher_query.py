@@ -139,6 +139,13 @@ class Query:
         order_items: list[OrderItem] | None = None,
         skip: int | None = None,
         limit: int | None = None,
+        distinct: bool = False,
+        with_distinct: bool = False,
+        with_order_items: list[OrderItem] | None = None,
+        with_skip: int | None = None,
+        with_limit: int | None = None,
+        has_multiple_with_clauses: bool = False,
+        has_match_after_with: bool = False,
     ) -> None:
         self._raw = raw
         self._patterns = list(patterns)
@@ -156,6 +163,13 @@ class Query:
         self._order_items = [] if order_items is None else list(order_items)
         self._skip = skip
         self._limit = limit
+        self._distinct = distinct
+        self._with_distinct = with_distinct
+        self._with_order_items = [] if with_order_items is None else list(with_order_items)
+        self._with_skip = with_skip
+        self._with_limit = with_limit
+        self._has_multiple_with_clauses = has_multiple_with_clauses
+        self._has_match_after_with = has_match_after_with
 
     @property
     def raw(self) -> str:
@@ -209,10 +223,40 @@ class Query:
     def limit(self) -> int | None:
         return self._limit
 
+    @property
+    def distinct(self) -> bool:
+        return self._distinct
+
+    @property
+    def with_distinct(self) -> bool:
+        return self._with_distinct
+
+    @property
+    def with_order_items(self) -> list[OrderItem]:
+        return list(self._with_order_items)
+
+    @property
+    def with_skip(self) -> int | None:
+        return self._with_skip
+
+    @property
+    def with_limit(self) -> int | None:
+        return self._with_limit
+
+    @property
+    def has_multiple_with_clauses(self) -> bool:
+        return self._has_multiple_with_clauses
+
+    @property
+    def has_match_after_with(self) -> bool:
+        return self._has_match_after_with
+
     @classmethod
     def parse(cls, cypher: str) -> "Query":
         parse_tree, parser = _parse(cypher)
         patterns = _extract_patterns(parser, parse_tree)
+        return_projection_body = _projection_body(parser, parse_tree)
+        with_projection_body = _with_projection_body(parser, parse_tree)
         return cls(
             cypher,
             patterns,
@@ -222,9 +266,16 @@ class Query:
             _extract_projection_items(parser, parse_tree, in_with=True),
             _extract_with_where_expression(parser, parse_tree),
             _has_variable_length_traversal(parser, parse_tree),
-            _extract_order_items(parser, parse_tree),
-            _extract_skip(parser, parse_tree),
-            _extract_limit(parser, parse_tree),
+            _extract_order_items(return_projection_body),
+            _extract_skip(return_projection_body),
+            _extract_limit(return_projection_body),
+            _extract_distinct(return_projection_body),
+            _extract_distinct(with_projection_body),
+            _extract_order_items(with_projection_body),
+            _extract_skip(with_projection_body),
+            _extract_limit(with_projection_body),
+            _has_multiple_with_clauses(parser, parse_tree),
+            _has_match_after_with(parser, parse_tree),
         )
 
 
@@ -268,21 +319,10 @@ def _extract_projection_items(parser: Any, parse_tree: Any, in_with: bool) -> li
 
 
 def _extract_with_where_expression(parser: Any, parse_tree: Any) -> Expression | None:
-    stack: list[Any] = [parse_tree]
-    while stack:
-        current = stack.pop()
-        rule_name = _rule_name(parser, current)
-        if rule_name is not None and _normalized_rule_name(rule_name) == "where" and _is_with_context(current):
-            for idx in range(getattr(current, "getChildCount", lambda: 0)()):
-                child = current.getChild(idx)
-                if _rule_name(parser, child) == "expression":
-                    return parse_expression(child.getText())
-            text = current.getText()
-            return parse_expression(text[5:] if text.upper().startswith("WHERE") else text)
-        child_count = getattr(current, "getChildCount", lambda: 0)()
-        for idx in range(child_count - 1, -1, -1):
-            stack.append(current.getChild(idx))
-    return None
+    with_st = _find_first_by_rule_name(parser, parse_tree, "withSt")
+    if with_st is None or with_st.where() is None:
+        return None
+    return parse_expression(with_st.where().expression().getText())
 
 
 def _find_first_by_rule_name(parser: Any, parse_tree: Any, rule_name: str) -> Any:
@@ -297,8 +337,27 @@ def _projection_body(parser: Any, parse_tree: Any) -> Any:
     return return_st.projectionBody()
 
 
-def _extract_order_items(parser: Any, parse_tree: Any) -> list[OrderItem]:
-    projection_body = _projection_body(parser, parse_tree)
+def _with_projection_body(parser: Any, parse_tree: Any) -> Any:
+    with_st = _find_first_by_rule_name(parser, parse_tree, "withSt")
+    if with_st is None:
+        return None
+    return with_st.projectionBody()
+
+
+def _has_multiple_with_clauses(parser: Any, parse_tree: Any) -> bool:
+    return len(_find_all_by_rule_name(parser, parse_tree, "withSt")) > 1
+
+
+def _has_match_after_with(parser: Any, parse_tree: Any) -> bool:
+    with_st = _find_first_by_rule_name(parser, parse_tree, "withSt")
+    if with_st is None:
+        return False
+    with_index = with_st.start.tokenIndex
+    match_clauses = _find_all_by_rule_name(parser, parse_tree, "matchSt")
+    return any(match_clause.start.tokenIndex > with_index for match_clause in match_clauses)
+
+
+def _extract_order_items(projection_body: Any) -> list[OrderItem]:
     if projection_body is None or projection_body.orderSt() is None:
         return []
     order_items: list[OrderItem] = []
@@ -308,18 +367,20 @@ def _extract_order_items(parser: Any, parse_tree: Any) -> list[OrderItem]:
     return order_items
 
 
-def _extract_skip(parser: Any, parse_tree: Any) -> int | None:
-    projection_body = _projection_body(parser, parse_tree)
+def _extract_skip(projection_body: Any) -> int | None:
     if projection_body is None or projection_body.skipSt() is None:
         return None
     return _require_integer_literal(parse_expression(projection_body.skipSt().expression().getText()), "SKIP")
 
 
-def _extract_limit(parser: Any, parse_tree: Any) -> int | None:
-    projection_body = _projection_body(parser, parse_tree)
+def _extract_limit(projection_body: Any) -> int | None:
     if projection_body is None or projection_body.limitSt() is None:
         return None
     return _require_integer_literal(parse_expression(projection_body.limitSt().expression().getText()), "LIMIT")
+
+
+def _extract_distinct(projection_body: Any) -> bool:
+    return projection_body is not None and projection_body.DISTINCT() is not None
 
 
 def _require_integer_literal(expression: Expression, clause: str) -> int:

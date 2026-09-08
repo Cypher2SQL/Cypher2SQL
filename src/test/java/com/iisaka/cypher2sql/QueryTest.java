@@ -114,15 +114,15 @@ class QueryTest {
     }
 
     @Test
-    void throwsForWithClausePlaceholder() {
+    void rendersWithAliasedScalarProjection() {
         final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
-        final Query query = Query.of("MATCH (p:Person) WITH p.id AS pid WHERE p.id > 1 RETURN pid");
+        final Query query = Query.of("MATCH (p:Person) WITH p.id AS pid WHERE pid > 1 RETURN pid");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
 
-        final UnsupportedOperationException ex =
-                assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
         assertEquals(
-                "WITH clauses are parsed but not rendered yet; pipeline semantics are a future enhancement.",
-                ex.getMessage());
+                "SELECT with0.pid FROM (SELECT t0.id AS pid FROM \"people\" t0) with0 WHERE (with0.pid > 1)",
+                sql
+        );
     }
 
     @Test
@@ -600,12 +600,19 @@ class QueryTest {
     }
 
     @Test
-    void throwsForWhereOnOptionalMatch() {
-        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> Query.of(
+    void rendersWhereOnOptionalMatchAsExtraJoinCondition() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of(
                 "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) "
-                        + "WHERE a.id > 1 RETURN p").asReadQuery(SchemaDefinition.fromYamlResource("schema.yaml")));
+                        + "WHERE a.id > 1 RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
 
-        assertEquals("WHERE on OPTIONAL MATCH is not supported yet.", exception.getMessage());
+        assertEquals(
+                "SELECT t0.* FROM \"people\" t0 INNER JOIN \"people_movies\" j3 ON t0.id = j3.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j3.movie_id = t1.id "
+                        + "LEFT JOIN \"people\" t2 ON t1.author_id = t2.id AND ((t2.id > 1))",
+                sql
+        );
     }
 
     @Test
@@ -615,5 +622,158 @@ class QueryTest {
 
         final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
         assertEquals("Multiple top-level MATCH patterns are not supported yet. Found: 2", exception.getMessage());
+    }
+
+    @Test
+    void rendersReturnDistinctOnProperty() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN DISTINCT p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT DISTINCT t0.name FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+                sql
+        );
+    }
+
+    @Test
+    void rendersReturnDistinctOnWildcard() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN DISTINCT p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT DISTINCT t0.* FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersWithBareNodePassthrough() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WITH p RETURN p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0) with0", sql);
+    }
+
+    @Test
+    void rendersWithBareNodePassthroughAndPreWithWhere() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.id > 1 WITH p RETURN p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0 WHERE (t0.id > 1)) with0",
+                sql
+        );
+    }
+
+    @Test
+    void rendersWithWholeQueryAggregateWithoutGrouping() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH count(m) AS total RETURN total");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT with0.total FROM (SELECT COUNT(t1.id) AS total FROM \"people\" t0 "
+                        + "INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id) with0",
+                sql
+        );
+    }
+
+    @Test
+    void rendersPostWithWhereAgainstPassedThroughNode() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WITH p WHERE p.id > 1 RETURN p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0) with0 WHERE (with0.id > 1)",
+                sql
+        );
+    }
+
+    @Test
+    void rendersWithDistinct() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH DISTINCT p RETURN p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT with0.name FROM (SELECT DISTINCT t0.* FROM \"people\" t0 "
+                        + "INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id) with0",
+                sql
+        );
+    }
+
+    @Test
+    void rendersWithOwnOrderByAndLimitIndependentlyOfReturn() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WITH p ORDER BY p.name LIMIT 1 RETURN p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0 ORDER BY t0.name ASC LIMIT 1) with0",
+                sql
+        );
+    }
+
+    @Test
+    void throwsForTwoWithClauses() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WITH p AS p1 WITH p1 AS p2 RETURN p2");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals("Only one WITH clause is supported yet.", exception.getMessage());
+    }
+
+    @Test
+    void throwsForMatchAfterWith() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WITH p MATCH (p)-[:ACTED_IN]->(m:Movie) RETURN m");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals("MATCH after WITH is not supported yet.", exception.getMessage());
+    }
+
+    @Test
+    void throwsForMixedAggregationInWith() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH p, count(m) AS total RETURN p, total");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals(
+                "Aggregation grouping in WITH is not supported yet; all WITH items must be aggregate expressions, or none.",
+                exception.getMessage());
+    }
+
+    @Test
+    void throwsForUnaliasedComputedWithItem() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WITH p.name RETURN p.name");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals("WITH items must be aliased unless they pass through a plain variable.", exception.getMessage());
+    }
+
+    @Test
+    void throwsForRelationshipVariablePassthroughInWith() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie) WITH r RETURN r");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals("Relationship variables cannot be passed through WITH yet: r", exception.getMessage());
+    }
+
+    @Test
+    void throwsForMoreThanOneNodePassthroughInWith() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH p, m RETURN p");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals(
+                "WITH can pass through at most one node variable unchanged; alias the rest to a scalar expression.",
+                exception.getMessage());
     }
 }

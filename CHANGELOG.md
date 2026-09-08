@@ -7,7 +7,10 @@ All notable changes to this project are documented in this file.
 ### Added
 - `ORDER BY` translation for `RETURN`, including multiple sort keys and explicit `ASC`/`DESC` (Java and Python).
 - `LIMIT` and `SKIP` translation for `RETURN`, restricted to integer literals; `SKIP` without `LIMIT` renders as `LIMIT -1 OFFSET n` for SQLite/Postgres/MySQL compatibility (Java and Python).
-- `OPTIONAL MATCH` translation to SQL `LEFT JOIN`. The optional pattern must share a variable already bound by a preceding `MATCH` clause; a `WHERE` predicate directly on an `OPTIONAL MATCH` clause is an explicit unsupported error for now, to avoid silently collapsing the outer join back into an inner join.
+- `OPTIONAL MATCH` translation to SQL `LEFT JOIN`.
+- `RETURN DISTINCT` / `WITH DISTINCT`, mapping to `SELECT DISTINCT`.
+- `WHERE` directly on an `OPTIONAL MATCH` clause, folded into the `LEFT JOIN`'s `ON` condition (not a global `WHERE`) so a failing predicate null-extends the row instead of dropping it or silently degrading to an `INNER JOIN`.
+- `WITH` as a pipeline boundary: renders as a derived-table subquery that the following `RETURN`/`WHERE`/`ORDER BY`/`LIMIT`/`SKIP`/`DISTINCT` runs against. Scoped to one `WITH` per query, no `MATCH` after it, no aggregation grouping (mixed aggregate/non-aggregate items — no `GROUP BY` support exists anywhere yet), and at most one node variable passed through unchanged (its columns are selected as `alias.*`, so more than one risks colliding/duplicate column names across differently-shaped tables); a bare relationship-variable passthrough is also unsupported. All violations are explicit errors, not silently wrong SQL.
 
 ### Fixed
 - Integer literals in Cypher expressions (Java) were always parsed as `Double` due to Java ternary-operator numeric promotion in the literal parser, silently losing integer-ness even though rendering happened to mask it. Numeric literal parsing now returns `Long` for integers as intended.

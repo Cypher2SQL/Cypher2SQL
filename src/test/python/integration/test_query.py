@@ -58,6 +58,63 @@ class QueryTest(unittest.TestCase):
             rows,
         )
 
+    def test_executes_return_distinct_against_fresh_database(self) -> None:
+        schema = SchemaDefinition.from_yaml_path(str(RESOURCE_DIR / "schema.yaml"))
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN DISTINCT p.name ORDER BY p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        with sqlite3.connect(":memory:") as connection:
+            connection.executescript((RESOURCE_DIR / "database.sql").read_text(encoding="utf-8"))
+            rows = connection.execute(sql).fetchall()
+
+        self.assertEqual([("Carrie-Anne Moss",), ("Keanu Reeves",)], rows)
+
+    def test_executes_optional_match_with_own_where_preserving_outer_join_semantics(self) -> None:
+        schema = SchemaDefinition.from_yaml_path(str(RESOURCE_DIR / "schema.yaml"))
+        query = Query.parse(
+            "MATCH (p:Person) OPTIONAL MATCH (p)-[:DIRECTED]->(m:Movie) WHERE m.id > 100 "
+            "RETURN p.name, m.title ORDER BY p.name"
+        )
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        with sqlite3.connect(":memory:") as connection:
+            connection.executescript((RESOURCE_DIR / "database.sql").read_text(encoding="utf-8"))
+            rows = connection.execute(sql).fetchall()
+
+        self.assertEqual(
+            [
+                ("Carrie-Anne Moss", None),
+                ("Keanu Reeves", None),
+                ("Lana Wachowski", None),
+            ],
+            rows,
+        )
+
+    def test_executes_with_whole_query_aggregate_and_post_with_filter_against_fresh_database(self) -> None:
+        schema = SchemaDefinition.from_yaml_path(str(RESOURCE_DIR / "schema.yaml"))
+        query = Query.parse(
+            "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH count(m) AS totalRoles "
+            "WHERE totalRoles > 2 RETURN totalRoles"
+        )
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        with sqlite3.connect(":memory:") as connection:
+            connection.executescript((RESOURCE_DIR / "database.sql").read_text(encoding="utf-8"))
+            rows = connection.execute(sql).fetchall()
+
+        self.assertEqual([(3,)], rows)
+
+    def test_executes_with_passthrough_and_post_with_filter_against_fresh_database(self) -> None:
+        schema = SchemaDefinition.from_yaml_path(str(RESOURCE_DIR / "schema.yaml"))
+        query = Query.parse("MATCH (p:Person) WITH p WHERE p.id > 1 RETURN p.name ORDER BY p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        with sqlite3.connect(":memory:") as connection:
+            connection.executescript((RESOURCE_DIR / "database.sql").read_text(encoding="utf-8"))
+            rows = connection.execute(sql).fetchall()
+
+        self.assertEqual([("Carrie-Anne Moss",), ("Lana Wachowski",)], rows)
+
 
 if __name__ == "__main__":
     unittest.main()

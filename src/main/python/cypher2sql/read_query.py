@@ -147,6 +147,7 @@ class BoundPattern:
     nodes: list[BoundNode]
     traversals: list[BoundTraversal]
     is_optional: bool = False
+    local_where_expression: Expression | None = None
 
     def __post_init__(self) -> None:
         if len(self.nodes) != len(self.traversals) + 1:
@@ -160,13 +161,25 @@ class BoundPattern:
 
 
 @dataclass(frozen=True)
+class FinalStage:
+    where_expression: Expression | None
+    projection_items: list[ProjectionItem]
+    distinct: bool
+    order_items: list[OrderItem]
+    skip: int | None
+    limit: int | None
+
+
+@dataclass(frozen=True)
 class ReadQuery:
     patterns: list[BoundPattern]
     where_expression: Expression | None
     projection_items: list[ProjectionItem]
+    distinct: bool = False
     order_items: list[OrderItem] = field(default_factory=list)
     skip: int | None = None
     limit: int | None = None
+    final_stage: FinalStage | None = None
 
     @property
     def pattern_count(self) -> int:
@@ -198,6 +211,8 @@ class ReadQuery:
 
         base_pattern = self.patterns[0]
         select = SelectQuery.select_from(base_pattern.root.mapping.qualified_table, base_pattern.root.alias)
+        if self.distinct:
+            select.set_distinct()
         next_join_alias_counter = [len(nodes_by_alias)]
         edge_projections: dict[str, list[str]] = {}
         edge_property_projections: dict[str, dict[str, str]] = {}
@@ -205,6 +220,13 @@ class ReadQuery:
         self._apply_traversals(base_pattern, select, JoinType.INNER, next_join_alias_counter, edge_projections, edge_property_projections)
         for pattern in self.patterns[1:]:
             self._apply_traversals(pattern, select, JoinType.LEFT, next_join_alias_counter, edge_projections, edge_property_projections)
+            if pattern.local_where_expression is not None:
+                if not pattern.traversals:
+                    raise NotImplementedError("WHERE on an OPTIONAL MATCH with no relationships is not supported.")
+                rendered = self._render_expression(
+                    pattern.local_where_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+                )
+                select.and_last_join_condition(rendered)
 
         self._apply_where(select, self.where_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
         self._apply_return_projection(
@@ -216,7 +238,58 @@ class ReadQuery:
             select.set_limit(self.limit)
         if self.skip is not None:
             select.set_offset(self.skip)
-        return select
+        if self.final_stage is None:
+            return select
+        return self._render_final_stage(select, aliases_by_variable, nodes_by_alias, edge_projections)
+
+    def _render_final_stage(
+        self,
+        inner_select: SelectQuery,
+        inner_aliases_by_variable: dict[str, str],
+        inner_nodes_by_alias: dict[str, BoundNode],
+        inner_edge_projections: dict[str, list[str]],
+    ) -> SelectQuery:
+        outer = SelectQuery.from_subquery_select(inner_select, "with0")
+        aliases_by_variable: dict[str, str] = {}
+        nodes_by_alias: dict[str, BoundNode] = {}
+        edge_projections: dict[str, list[str]] = {}
+        edge_property_projections: dict[str, dict[str, str]] = {}
+        saw_node_passthrough = False
+
+        for item in self.projection_items:
+            if isinstance(item.expression, VariableExpression) and item.expression.name in inner_aliases_by_variable:
+                if saw_node_passthrough:
+                    raise NotImplementedError(
+                        "WITH can pass through at most one node variable unchanged; alias the rest to a scalar expression."
+                    )
+                saw_node_passthrough = True
+                original = inner_nodes_by_alias[inner_aliases_by_variable[item.expression.name]]
+                carried = BoundNode(original.node, original.mapping, "with0")
+                aliases_by_variable[item.alias if item.alias is not None else item.expression.name] = "with0"
+                nodes_by_alias["with0"] = carried
+            elif isinstance(item.expression, VariableExpression) and item.expression.name in inner_edge_projections:
+                raise NotImplementedError(
+                    f"Relationship variables cannot be passed through WITH yet: {item.expression.name}"
+                )
+            elif item.alias is None:
+                raise NotImplementedError("WITH items must be aliased unless they pass through a plain variable.")
+            else:
+                edge_projections[item.alias] = [f"with0.{item.alias}"]
+
+        final_stage = self.final_stage
+        if final_stage.distinct:
+            outer.set_distinct()
+        self._apply_where(outer, final_stage.where_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
+        self._apply_return_projection(
+            outer, final_stage.projection_items, nodes_by_alias.get("with0"),
+            aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections,
+        )
+        self._apply_order_by(outer, final_stage.order_items, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
+        if final_stage.limit is not None:
+            outer.set_limit(final_stage.limit)
+        if final_stage.skip is not None:
+            outer.set_offset(final_stage.skip)
+        return outer
 
     @staticmethod
     def _register_nodes(

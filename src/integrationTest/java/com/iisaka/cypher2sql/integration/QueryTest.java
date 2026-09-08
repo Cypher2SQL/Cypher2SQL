@@ -93,6 +93,101 @@ class QueryTest {
         }
     }
 
+    @Test
+    void executesReturnDistinctAgainstFreshDatabase() throws Exception {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource(SCHEMA_RESOURCE);
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN DISTINCT p.name ORDER BY p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            executeSqlResource(connection, DATABASE_RESOURCE);
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(sql)) {
+                assertTrue(resultSet.next());
+                assertEquals("Carrie-Anne Moss", resultSet.getString(1));
+
+                assertTrue(resultSet.next());
+                assertEquals("Keanu Reeves", resultSet.getString(1));
+
+                assertFalse(resultSet.next());
+            }
+        }
+    }
+
+    @Test
+    void executesOptionalMatchWithOwnWherePreservingOuterJoinSemantics() throws Exception {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource(SCHEMA_RESOURCE);
+        final Query query = Query.of(
+                "MATCH (p:Person) OPTIONAL MATCH (p)-[:DIRECTED]->(m:Movie) WHERE m.id > 100 "
+                        + "RETURN p.name, m.title ORDER BY p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            executeSqlResource(connection, DATABASE_RESOURCE);
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(sql)) {
+                assertTrue(resultSet.next());
+                assertEquals("Carrie-Anne Moss", resultSet.getString(1));
+                assertNull(resultSet.getString(2));
+
+                assertTrue(resultSet.next());
+                assertEquals("Keanu Reeves", resultSet.getString(1));
+                assertNull(resultSet.getString(2));
+
+                assertTrue(resultSet.next());
+                assertEquals("Lana Wachowski", resultSet.getString(1));
+                assertNull(resultSet.getString(2));
+
+                assertFalse(resultSet.next());
+            }
+        }
+    }
+
+    @Test
+    void executesWithWholeQueryAggregateAndPostWithFilterAgainstFreshDatabase() throws Exception {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource(SCHEMA_RESOURCE);
+        final Query query = Query.of(
+                "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH count(m) AS totalRoles "
+                        + "WHERE totalRoles > 2 RETURN totalRoles");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            executeSqlResource(connection, DATABASE_RESOURCE);
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(sql)) {
+                assertTrue(resultSet.next());
+                assertEquals(3, resultSet.getInt(1));
+                assertFalse(resultSet.next());
+            }
+        }
+    }
+
+    @Test
+    void executesWithPassthroughAndPostWithFilterAgainstFreshDatabase() throws Exception {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource(SCHEMA_RESOURCE);
+        final Query query = Query.of(
+                "MATCH (p:Person) WITH p WHERE p.id > 1 RETURN p.name ORDER BY p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            executeSqlResource(connection, DATABASE_RESOURCE);
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(sql)) {
+                assertTrue(resultSet.next());
+                assertEquals("Carrie-Anne Moss", resultSet.getString(1));
+
+                assertTrue(resultSet.next());
+                assertEquals("Lana Wachowski", resultSet.getString(1));
+
+                assertFalse(resultSet.next());
+            }
+        }
+    }
+
     private static void executeSqlResource(final Connection connection, final String resourcePath)
             throws IOException, SQLException {
         final String script;

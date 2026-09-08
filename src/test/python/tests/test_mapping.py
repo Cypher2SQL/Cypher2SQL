@@ -1,6 +1,6 @@
 import unittest
 
-from cypher2sql.cypher_query import Edge, Node, Pattern, Query, ReturnItem, Direction
+from cypher2sql.cypher_query import Edge, Node, Pattern, ProjectionItem, Query, ReturnItem, Direction, VariableExpression
 from cypher2sql.mapping import Mapping
 from cypher2sql.schema import EdgeMapping, NodeMapping, SchemaDefinition
 from cypher2sql.sql_query import StandardGrammar
@@ -262,6 +262,22 @@ class CypherSqlMappingTest(unittest.TestCase):
             'SELECT t0.*, t1.* FROM "people" t0 INNER JOIN "movies" t1 ON t0.favorite_movie_id = t1.id',
             rtl_sql,
         )
+
+    def test_raises_for_multiple_with_clauses(self) -> None:
+        # Built by hand: the vendored antlr4_cypher grammar's multiPartQ rule only
+        # supports a single WITH per query, so this can't be constructed via Query.parse.
+        query = Query(
+            "MATCH (p:Person) WITH p AS p1 ... WITH p1 AS p2 RETURN p2",
+            [Pattern(nodes=[Node("p", "Person")], edges=[])],
+            parse_tree=object(),
+            with_projection_items=[ProjectionItem(VariableExpression("p"), "p1")],
+            has_multiple_with_clauses=True,
+        )
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(self.schema).to_sql(query)
+
+        self.assertEqual("Only one WITH clause is supported yet.", str(context.exception))
 
 
 if __name__ == "__main__":

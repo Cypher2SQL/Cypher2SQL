@@ -289,10 +289,11 @@ Legend:
 | `WHERE` | Limited | SQL builder has `where` support; full Cypher predicate translation not complete |
 | `RETURN` | Limited | Parsing works for complete-query forms; projection translation is minimal |
 | `RETURN` aggregate functions (for example `count(*)`) | Planned (parsing verified) | ANTLR parsing is covered; SQL translation tests are currently disabled/skipped |
+| `DISTINCT` (`RETURN`/`WITH`) | Supported | Maps to `SELECT DISTINCT` |
 | `ORDER BY` | Supported | Multiple sort keys, `ASC`/`DESC` |
 | `LIMIT` / `SKIP` | Supported | Integer literals only; `SKIP` without `LIMIT` renders `LIMIT -1 OFFSET n` |
-| `OPTIONAL MATCH` | Limited | Translates to `LEFT JOIN`; must share a variable with a preceding `MATCH`, and cannot carry its own `WHERE` yet |
-| `WITH` | Planned | Not translated yet |
+| `OPTIONAL MATCH` | Limited | Translates to `LEFT JOIN`, including its own `WHERE` (folded into the join condition); must still share a variable with a preceding `MATCH` and can't be the first clause |
+| `WITH` | Limited | Translates to a derived-table subquery; one `WITH` per query, no `MATCH` after it, no aggregation grouping (mixed aggregate/non-aggregate items), and at most one passthrough node variable |
 | `UNWIND` | Planned | Not translated yet |
 | `CREATE` | Placeholder | Write mode intentionally disabled |
 | `MERGE` | Placeholder | Write mode intentionally disabled |

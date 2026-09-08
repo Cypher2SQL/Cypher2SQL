@@ -41,26 +41,52 @@ public final class ReadQuery {
             Map.entry("toupper", "UPPER"),
             Map.entry("tolower", "LOWER"));
 
+    public record FinalStage(
+            Expression whereExpression,
+            List<ProjectionItem> projectionItems,
+            boolean distinct,
+            List<OrderItem> orderItems,
+            Long skip,
+            Long limit) {
+    }
+
     private final List<BoundPattern> patterns;
     private final Expression whereExpression;
     private final List<ProjectionItem> projectionItems;
+    private final boolean distinct;
     private final List<OrderItem> orderItems;
     private final Long skip;
     private final Long limit;
+    private final FinalStage finalStage;
 
     public ReadQuery(
             final List<BoundPattern> patterns,
             final Expression whereExpression,
             final List<ProjectionItem> projectionItems,
+            final boolean distinct,
             final List<OrderItem> orderItems,
             final Long skip,
             final Long limit) {
+        this(patterns, whereExpression, projectionItems, distinct, orderItems, skip, limit, null);
+    }
+
+    public ReadQuery(
+            final List<BoundPattern> patterns,
+            final Expression whereExpression,
+            final List<ProjectionItem> projectionItems,
+            final boolean distinct,
+            final List<OrderItem> orderItems,
+            final Long skip,
+            final Long limit,
+            final FinalStage finalStage) {
         this.patterns = Collections.unmodifiableList(new ArrayList<>(patterns));
         this.whereExpression = whereExpression;
         this.projectionItems = Collections.unmodifiableList(new ArrayList<>(projectionItems));
+        this.distinct = distinct;
         this.orderItems = Collections.unmodifiableList(new ArrayList<>(orderItems));
         this.skip = skip;
         this.limit = limit;
+        this.finalStage = finalStage;
     }
 
     public int patternCount() {
@@ -73,6 +99,10 @@ public final class ReadQuery {
 
     public List<ProjectionItem> projectionItems() {
         return projectionItems;
+    }
+
+    public boolean distinct() {
+        return distinct;
     }
 
     public Expression whereExpression() {
@@ -118,13 +148,26 @@ public final class ReadQuery {
 
         final BoundPattern basePattern = patterns.get(0);
         final SelectQuery select = SelectQuery.from(basePattern.root().mapping().table(), basePattern.root().alias());
+        if (distinct) {
+            select.setDistinct();
+        }
         final int[] nextJoinAliasCounter = {nodesByAlias.size()};
         final Map<String, List<String>> edgeProjections = new HashMap<>();
         final Map<String, Map<String, String>> edgePropertyProjections = new HashMap<>();
 
         applyTraversals(basePattern, select, JoinClause.JoinType.INNER, nextJoinAliasCounter, edgeProjections, edgePropertyProjections);
         for (int i = 1; i < patterns.size(); i++) {
-            applyTraversals(patterns.get(i), select, JoinClause.JoinType.LEFT, nextJoinAliasCounter, edgeProjections, edgePropertyProjections);
+            final BoundPattern pattern = patterns.get(i);
+            applyTraversals(pattern, select, JoinClause.JoinType.LEFT, nextJoinAliasCounter, edgeProjections, edgePropertyProjections);
+            if (pattern.localWhereExpression() != null) {
+                if (pattern.traversals().isEmpty()) {
+                    throw new UnsupportedOperationException(
+                            "WHERE on an OPTIONAL MATCH with no relationships is not supported.");
+                }
+                final String rendered = renderExpression(
+                        pattern.localWhereExpression(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections, false);
+                select.andLastJoinCondition(rendered);
+            }
         }
 
         applyWhere(select, whereExpression, aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections);
@@ -136,7 +179,63 @@ public final class ReadQuery {
         if (skip != null) {
             select.setOffset(skip);
         }
-        return select;
+        if (finalStage == null) {
+            return select;
+        }
+        return renderFinalStage(select, aliasesByVariable, nodesByAlias, edgeProjections);
+    }
+
+    private SelectQuery renderFinalStage(
+            final SelectQuery innerSelect,
+            final Map<String, String> innerAliasesByVariable,
+            final Map<String, BoundNode> innerNodesByAlias,
+            final Map<String, List<String>> innerEdgeProjections) {
+        final SelectQuery outer = SelectQuery.fromSubquery(innerSelect, "with0");
+        final Map<String, String> aliasesByVariable = new HashMap<>();
+        final Map<String, BoundNode> nodesByAlias = new HashMap<>();
+        final Map<String, List<String>> edgeProjections = new HashMap<>();
+        final Map<String, Map<String, String>> edgePropertyProjections = new HashMap<>();
+        boolean sawNodePassthrough = false;
+
+        for (final ProjectionItem item : projectionItems) {
+            if (item.expression() instanceof Expression.VariableExpression variable
+                    && innerAliasesByVariable.containsKey(variable.name())) {
+                if (sawNodePassthrough) {
+                    throw new UnsupportedOperationException(
+                            "WITH can pass through at most one node variable unchanged; alias the rest to a scalar expression.");
+                }
+                sawNodePassthrough = true;
+                final BoundNode original = innerNodesByAlias.get(innerAliasesByVariable.get(variable.name()));
+                final BoundNode carried = new BoundNode(original.node(), original.mapping(), "with0");
+                aliasesByVariable.put(item.alias() != null ? item.alias() : variable.name(), "with0");
+                nodesByAlias.put("with0", carried);
+            } else if (item.expression() instanceof Expression.VariableExpression variable
+                    && innerEdgeProjections.containsKey(variable.name())) {
+                throw new UnsupportedOperationException(
+                        "Relationship variables cannot be passed through WITH yet: " + variable.name());
+            } else if (item.alias() == null) {
+                throw new UnsupportedOperationException(
+                        "WITH items must be aliased unless they pass through a plain variable.");
+            } else {
+                edgeProjections.put(item.alias(), List.of("with0." + item.alias()));
+            }
+        }
+
+        if (finalStage.distinct()) {
+            outer.setDistinct();
+        }
+        applyWhere(outer, finalStage.whereExpression(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections);
+        applyReturnProjection(
+                outer, finalStage.projectionItems(), nodesByAlias.get("with0"),
+                aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections);
+        applyOrderBy(outer, finalStage.orderItems(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections);
+        if (finalStage.limit() != null) {
+            outer.setLimit(finalStage.limit());
+        }
+        if (finalStage.skip() != null) {
+            outer.setOffset(finalStage.skip());
+        }
+        return outer;
     }
 
     private static void registerNodes(

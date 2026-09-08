@@ -18,8 +18,11 @@ import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public final class Query {
+    private static final Set<String> AGGREGATE_FUNCTIONS = Set.of("count", "sum", "avg", "min", "max");
+
     private final String raw;
     private final ParseTree parseTree;
     private final List<List<Node>> patternNodes;
@@ -27,13 +30,20 @@ public final class Query {
     private final List<Boolean> patternOptional;
     private final List<Expression> patternLocalWhereExpressions;
     private final List<ProjectionItem> withProjectionItems;
+    private final boolean withDistinct;
+    private final List<OrderItem> withOrderItems;
+    private final Long withSkip;
+    private final Long withLimit;
     private final Expression withWhereExpression;
     private final Expression whereExpression;
     private final List<ProjectionItem> projectionItems;
+    private final boolean distinct;
     private final List<OrderItem> orderItems;
     private final Long skip;
     private final Long limit;
     private final boolean hasVariableLengthTraversal;
+    private final boolean hasMultipleWithClauses;
+    private final boolean hasMatchAfterWith;
 
     private Query(
             final String raw,
@@ -43,12 +53,19 @@ public final class Query {
             final List<Boolean> patternOptional,
             final List<Expression> patternLocalWhereExpressions,
             final List<ProjectionItem> withProjectionItems,
+            final boolean withDistinct,
+            final List<OrderItem> withOrderItems,
+            final Long withSkip,
+            final Long withLimit,
             final Expression withWhereExpression,
             final List<ProjectionItem> projectionItems,
+            final boolean distinct,
             final List<OrderItem> orderItems,
             final Long skip,
             final Long limit,
-            final boolean hasVariableLengthTraversal) {
+            final boolean hasVariableLengthTraversal,
+            final boolean hasMultipleWithClauses,
+            final boolean hasMatchAfterWith) {
         this.raw = raw;
         this.parseTree = parseTree;
         this.patternNodes = copyNested(patternNodes);
@@ -56,13 +73,20 @@ public final class Query {
         this.patternOptional = Collections.unmodifiableList(new ArrayList<>(patternOptional));
         this.patternLocalWhereExpressions = Collections.unmodifiableList(new ArrayList<>(patternLocalWhereExpressions));
         this.withProjectionItems = Collections.unmodifiableList(new ArrayList<>(withProjectionItems));
+        this.withDistinct = withDistinct;
+        this.withOrderItems = Collections.unmodifiableList(new ArrayList<>(withOrderItems));
+        this.withSkip = withSkip;
+        this.withLimit = withLimit;
         this.withWhereExpression = withWhereExpression;
         this.whereExpression = patternLocalWhereExpressions.isEmpty() ? null : patternLocalWhereExpressions.get(0);
         this.projectionItems = Collections.unmodifiableList(new ArrayList<>(projectionItems));
+        this.distinct = distinct;
         this.orderItems = Collections.unmodifiableList(new ArrayList<>(orderItems));
         this.skip = skip;
         this.limit = limit;
         this.hasVariableLengthTraversal = hasVariableLengthTraversal;
+        this.hasMultipleWithClauses = hasMultipleWithClauses;
+        this.hasMatchAfterWith = hasMatchAfterWith;
     }
 
     public String raw() {
@@ -89,6 +113,10 @@ public final class Query {
         return projectionItems;
     }
 
+    public boolean distinct() {
+        return distinct;
+    }
+
     public Expression whereExpression() {
         return whereExpression;
     }
@@ -113,6 +141,22 @@ public final class Query {
         return withProjectionItems;
     }
 
+    public boolean withDistinct() {
+        return withDistinct;
+    }
+
+    public List<OrderItem> withOrderItems() {
+        return withOrderItems;
+    }
+
+    public Long withSkip() {
+        return withSkip;
+    }
+
+    public Long withLimit() {
+        return withLimit;
+    }
+
     public Expression withWhereExpression() {
         return withWhereExpression;
     }
@@ -131,6 +175,8 @@ public final class Query {
         final String[] ruleNames = parsed.ruleNames();
         final List<ExtractedPattern> patterns = extractPatterns(parseTree, ruleNames);
         final Cypher25Parser.ReturnBodyContext returnBody = returnBody(parseTree);
+        final Cypher25Parser.WithClauseContext withClause = withClause(parseTree);
+        final Cypher25Parser.ReturnBodyContext withReturnBody = withClause == null ? null : withClause.returnBody();
         return new Query(
                 cypher,
                 parseTree,
@@ -138,13 +184,20 @@ public final class Query {
                 patterns.stream().map(ExtractedPattern::edges).toList(),
                 patterns.stream().map(ExtractedPattern::optional).toList(),
                 patterns.stream().map(ExtractedPattern::localWhereExpression).toList(),
-                extractWithProjectionItems(parseTree),
-                extractWithWhereExpression(parseTree),
+                extractWithProjectionItems(withClause),
+                extractDistinct(withReturnBody),
+                extractOrderItems(withReturnBody),
+                extractSkip(withReturnBody),
+                extractLimit(withReturnBody),
+                extractWithWhereExpression(withClause),
                 extractProjectionItems(parseTree),
+                extractDistinct(returnBody),
                 extractOrderItems(returnBody),
                 extractSkip(returnBody),
                 extractLimit(returnBody),
-                hasVariableLengthTraversal(parseTree, ruleNames));
+                hasVariableLengthTraversal(parseTree, ruleNames),
+                hasMultipleWithClauses(parseTree),
+                hasMatchAfterWith(parseTree));
     }
 
     public SelectQuery asSql(final SchemaDefinition schema) {
@@ -158,12 +211,15 @@ public final class Query {
                     "Variable-length traversals are not supported yet; recursive SQL translation is a future enhancement.");
         }
         if (hasWithClause()) {
-            throw new UnsupportedOperationException(
-                    "WITH clauses are parsed but not rendered yet; pipeline semantics are a future enhancement.");
-        }
-        for (int patternIndex = 1; patternIndex < patternCount(); patternIndex++) {
-            if (isPatternOptional(patternIndex) && patternLocalWhereExpressions.get(patternIndex) != null) {
-                throw new UnsupportedOperationException("WHERE on OPTIONAL MATCH is not supported yet.");
+            if (hasMultipleWithClauses) {
+                throw new UnsupportedOperationException("Only one WITH clause is supported yet.");
+            }
+            if (hasMatchAfterWith) {
+                throw new UnsupportedOperationException("MATCH after WITH is not supported yet.");
+            }
+            if (hasMixedAggregation(withProjectionItems)) {
+                throw new UnsupportedOperationException(
+                        "Aggregation grouping in WITH is not supported yet; all WITH items must be aggregate expressions, or none.");
             }
         }
 
@@ -200,9 +256,50 @@ public final class Query {
                         boundNodes.get(i),
                         boundNodes.get(i + 1)));
             }
-            patterns.add(new BoundPattern(boundNodes, traversals, isPatternOptional(patternIndex)));
+            patterns.add(new BoundPattern(
+                    boundNodes, traversals, isPatternOptional(patternIndex), patternLocalWhereExpressions.get(patternIndex)));
         }
-        return new ReadQuery(patterns, whereExpression, projectionItems, orderItems, skip, limit);
+
+        if (!hasWithClause()) {
+            return new ReadQuery(patterns, whereExpression, projectionItems, distinct, orderItems, skip, limit);
+        }
+        return new ReadQuery(
+                patterns,
+                whereExpression,
+                withProjectionItems,
+                withDistinct,
+                withOrderItems,
+                withSkip,
+                withLimit,
+                new ReadQuery.FinalStage(withWhereExpression, projectionItems, distinct, orderItems, skip, limit));
+    }
+
+    private static boolean isAggregate(final Expression expression) {
+        return switch (expression) {
+            case Expression.FunctionExpression function -> AGGREGATE_FUNCTIONS.contains(function.name().toLowerCase())
+                    || function.arguments().stream().anyMatch(Query::isAggregate);
+            case Expression.PropertyExpression property -> isAggregate(property.receiver());
+            case Expression.BinaryExpression binary -> isAggregate(binary.left()) || isAggregate(binary.right());
+            case Expression.UnaryExpression unary -> isAggregate(unary.operand());
+            case Expression.CaseExpression caseExpression -> (caseExpression.subject() != null && isAggregate(caseExpression.subject()))
+                    || caseExpression.whenThens().stream()
+                            .anyMatch(whenThen -> isAggregate(whenThen.whenExpression()) || isAggregate(whenThen.thenExpression()))
+                    || (caseExpression.elseExpression() != null && isAggregate(caseExpression.elseExpression()));
+            default -> false;
+        };
+    }
+
+    private static boolean hasMixedAggregation(final List<ProjectionItem> items) {
+        boolean anyAggregate = false;
+        boolean anyNonAggregate = false;
+        for (final ProjectionItem item : items) {
+            if (isAggregate(item.expression())) {
+                anyAggregate = true;
+            } else {
+                anyNonAggregate = true;
+            }
+        }
+        return anyAggregate && anyNonAggregate;
     }
 
     private static List<Node> substituteBoundLabels(final List<Node> nodes, final Map<String, BoundNode> boundByVariable) {
@@ -290,12 +387,20 @@ public final class Query {
         return returnClause == null ? null : returnClause.returnBody();
     }
 
+    private static Cypher25Parser.WithClauseContext withClause(final ParseTree parseTree) {
+        return findFirst(parseTree, Cypher25Parser.WithClauseContext.class);
+    }
+
     private static List<ProjectionItem> extractProjectionItems(final ParseTree parseTree) {
         final Cypher25Parser.ReturnBodyContext returnBody = returnBody(parseTree);
         if (returnBody == null || returnBody.returnItems() == null) {
             return List.of();
         }
         return projectionItems(returnBody.returnItems());
+    }
+
+    private static boolean extractDistinct(final Cypher25Parser.ReturnBodyContext returnBody) {
+        return returnBody != null && returnBody.DISTINCT() != null;
     }
 
     private static List<OrderItem> extractOrderItems(final Cypher25Parser.ReturnBodyContext returnBody) {
@@ -331,8 +436,7 @@ public final class Query {
                 clause + " must be an integer literal; parameters are not supported yet.");
     }
 
-    private static List<ProjectionItem> extractWithProjectionItems(final ParseTree parseTree) {
-        final Cypher25Parser.WithClauseContext withClause = findFirst(parseTree, Cypher25Parser.WithClauseContext.class);
+    private static List<ProjectionItem> extractWithProjectionItems(final Cypher25Parser.WithClauseContext withClause) {
         if (withClause == null || withClause.returnBody() == null || withClause.returnBody().returnItems() == null) {
             return List.of();
         }
@@ -362,14 +466,11 @@ public final class Query {
         return items;
     }
 
-    private static Expression extractWithWhereExpression(final ParseTree parseTree) {
-        final List<Cypher25Parser.WhereClauseContext> whereClauses = findAll(parseTree, Cypher25Parser.WhereClauseContext.class);
-        for (final Cypher25Parser.WhereClauseContext whereClause : whereClauses) {
-            if (isWithin(whereClause, Cypher25Parser.WithClauseContext.class)) {
-                return Expression.parse(whereClause.expression());
-            }
+    private static Expression extractWithWhereExpression(final Cypher25Parser.WithClauseContext withClause) {
+        if (withClause == null || withClause.whereClause() == null) {
+            return null;
         }
-        return null;
+        return Expression.parse(withClause.whereClause().expression());
     }
 
     private static <T extends ParseTree> T findFirst(final ParseTree parseTree, final Class<T> type) {
@@ -393,17 +494,6 @@ public final class Query {
         return matches;
     }
 
-    private static boolean isWithin(final ParseTree tree, final Class<? extends ParseTree> type) {
-        ParseTree current = tree.getParent();
-        while (current != null) {
-            if (type.isInstance(current)) {
-                return true;
-            }
-            current = current.getParent();
-        }
-        return false;
-    }
-
     private static boolean hasVariableLengthTraversal(final ParseTree parseTree, final String[] ruleNames) {
         final Deque<ParseTree> stack = new ArrayDeque<>();
         stack.push(parseTree);
@@ -420,6 +510,20 @@ public final class Query {
             }
         }
         return false;
+    }
+
+    private static boolean hasMultipleWithClauses(final ParseTree parseTree) {
+        return findAll(parseTree, Cypher25Parser.WithClauseContext.class).size() > 1;
+    }
+
+    private static boolean hasMatchAfterWith(final ParseTree parseTree) {
+        final Cypher25Parser.WithClauseContext withClause = withClause(parseTree);
+        if (withClause == null) {
+            return false;
+        }
+        final int withTokenIndex = withClause.getStart().getTokenIndex();
+        return findAll(parseTree, Cypher25Parser.MatchClauseContext.class).stream()
+                .anyMatch(matchClause -> matchClause.getStart().getTokenIndex() > withTokenIndex);
     }
 
     private List<Node> resolveNodeLabels(

@@ -3,10 +3,50 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .cypher_query import Direction, Edge, Node, Pattern, Query
-from .read_query import BoundNode, BoundPattern, BoundTraversal, ReadQuery
+from .cypher_query import (
+    BinaryExpression,
+    CaseExpression,
+    Direction,
+    Edge,
+    Expression,
+    FunctionExpression,
+    Node,
+    Pattern,
+    ProjectionItem,
+    PropertyExpression,
+    Query,
+    UnaryExpression,
+)
+from .read_query import BoundNode, BoundPattern, BoundTraversal, FinalStage, ReadQuery
 from .schema import SchemaDefinition, EdgeMapping
 from .sql_query import SelectQuery
+
+
+_AGGREGATE_FUNCTIONS = {"count", "sum", "avg", "min", "max"}
+
+
+def _is_aggregate(expression: Expression) -> bool:
+    if isinstance(expression, FunctionExpression):
+        return expression.name.lower() in _AGGREGATE_FUNCTIONS or any(_is_aggregate(arg) for arg in expression.arguments)
+    if isinstance(expression, PropertyExpression):
+        return _is_aggregate(expression.receiver)
+    if isinstance(expression, BinaryExpression):
+        return _is_aggregate(expression.left) or _is_aggregate(expression.right)
+    if isinstance(expression, UnaryExpression):
+        return _is_aggregate(expression.operand)
+    if isinstance(expression, CaseExpression):
+        return (
+            (expression.subject is not None and _is_aggregate(expression.subject))
+            or any(_is_aggregate(when) or _is_aggregate(then) for when, then in expression.when_thens)
+            or (expression.else_expression is not None and _is_aggregate(expression.else_expression))
+        )
+    return False
+
+
+def _has_mixed_aggregation(items: list[ProjectionItem]) -> bool:
+    any_aggregate = any(_is_aggregate(item.expression) for item in items)
+    any_non_aggregate = any(not _is_aggregate(item.expression) for item in items)
+    return any_aggregate and any_non_aggregate
 
 
 @dataclass
@@ -20,12 +60,14 @@ class Mapping:
         if query.has_variable_length_traversal:
             return self._translate_variable_length_traversal(query)
         if query.has_with_clause:
-            raise NotImplementedError(
-                "WITH clauses are parsed but not rendered yet; pipeline semantics are a future enhancement."
-            )
-        for pattern in query.patterns[1:]:
-            if pattern.is_optional and pattern.local_where_expression is not None:
-                raise NotImplementedError("WHERE on OPTIONAL MATCH is not supported yet.")
+            if query.has_multiple_with_clauses:
+                raise NotImplementedError("Only one WITH clause is supported yet.")
+            if query.has_match_after_with:
+                raise NotImplementedError("MATCH after WITH is not supported yet.")
+            if _has_mixed_aggregation(query.with_projection_items):
+                raise NotImplementedError(
+                    "Aggregation grouping in WITH is not supported yet; all WITH items must be aggregate expressions, or none."
+                )
 
         bound_by_variable: dict[str, BoundNode] = {}
         next_alias_index = [0]
@@ -57,15 +99,34 @@ class Mapping:
                 )
                 for idx, edge in enumerate(pattern.edges)
             ]
-            bound_patterns.append(BoundPattern(bound_nodes, traversals, pattern.is_optional))
+            bound_patterns.append(BoundPattern(bound_nodes, traversals, pattern.is_optional, pattern.local_where_expression))
 
+        if not query.has_with_clause:
+            return ReadQuery(
+                bound_patterns,
+                query.where_expression,
+                query.projection_items,
+                query.distinct,
+                query.order_items,
+                query.skip,
+                query.limit,
+            )
         return ReadQuery(
             bound_patterns,
             query.where_expression,
-            query.projection_items,
-            query.order_items,
-            query.skip,
-            query.limit,
+            query.with_projection_items,
+            query.with_distinct,
+            query.with_order_items,
+            query.with_skip,
+            query.with_limit,
+            FinalStage(
+                query.with_where_expression,
+                query.projection_items,
+                query.distinct,
+                query.order_items,
+                query.skip,
+                query.limit,
+            ),
         )
 
     def _substitute_bound_labels(self, nodes: list[Node], bound_by_variable: dict[str, BoundNode]) -> list[Node]:

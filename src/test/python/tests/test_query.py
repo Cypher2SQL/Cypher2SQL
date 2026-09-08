@@ -365,7 +365,7 @@ class IntegrationTest(unittest.TestCase):
         with self.assertRaisesRegex(NotImplementedError, "Function is parsed but not rendered yet: mystery"):
             Mapping(schema).to_sql(query)
 
-    def test_parse_with_clause_placeholder(self) -> None:
+    def test_parse_and_render_with_aliased_scalar_projection(self) -> None:
         raw = """
         nodes:
           - label: Person
@@ -374,15 +374,16 @@ class IntegrationTest(unittest.TestCase):
         edges: []
         """
         schema = SchemaDefinition.from_yaml_string(raw)
-        query = Query.parse("MATCH (p:Person) WITH p.id AS pid WHERE p.id > 1 RETURN pid")
+        query = Query.parse("MATCH (p:Person) WITH p.id AS pid WHERE pid > 1 RETURN pid")
 
         self.assertTrue(query.has_with_clause)
         self.assertEqual("pid", query.with_projection_items[0].alias)
-        with self.assertRaisesRegex(
-            NotImplementedError,
-            "WITH clauses are parsed but not rendered yet; pipeline semantics are a future enhancement.",
-        ):
-            Mapping(schema).to_sql(query)
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT with0.pid FROM (SELECT t0.id AS pid FROM \"people\" t0) with0 WHERE (with0.pid > 1)",
+            sql,
+        )
 
     def test_parse_and_render_mapped_properties_qualified_tables_and_composite_keys(self) -> None:
         raw = """
@@ -658,7 +659,7 @@ class IntegrationTest(unittest.TestCase):
 
         self.assertEqual("OPTIONAL MATCH cannot be the first clause yet.", str(context.exception))
 
-    def test_parse_raises_for_where_on_optional_match(self) -> None:
+    def test_parse_and_render_where_on_optional_match_as_extra_join_condition(self) -> None:
         raw = """
         nodes:
           - label: Person
@@ -687,11 +688,14 @@ class IntegrationTest(unittest.TestCase):
             "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) "
             "WHERE a.id > 1 RETURN p"
         )
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
 
-        with self.assertRaises(NotImplementedError) as context:
-            Mapping(schema).to_read_query(query)
-
-        self.assertEqual("WHERE on OPTIONAL MATCH is not supported yet.", str(context.exception))
+        self.assertEqual(
+            "SELECT t0.* FROM \"people\" t0 INNER JOIN \"people_movies\" j3 ON t0.id = j3.person_id "
+            "INNER JOIN \"movies\" t1 ON j3.movie_id = t1.id "
+            "LEFT JOIN \"people\" t2 ON t1.author_id = t2.id AND ((t2.id > 1))",
+            sql,
+        )
 
     def test_parse_raises_for_two_non_optional_match_clauses(self) -> None:
         raw = """
@@ -712,6 +716,299 @@ class IntegrationTest(unittest.TestCase):
 
         self.assertEqual(
             "Multiple top-level MATCH patterns are not supported yet. Found: 2", str(context.exception)
+        )
+
+    def test_parse_and_render_return_distinct_on_property(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN DISTINCT p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT DISTINCT t0.name FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+            sql,
+        )
+
+    def test_parse_and_render_return_distinct_on_wildcard(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN DISTINCT p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT DISTINCT t0.* FROM \"people\" t0", sql)
+
+    def test_parse_and_render_with_bare_node_passthrough(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WITH p RETURN p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0) with0", sql)
+
+    def test_parse_and_render_with_bare_node_passthrough_and_pre_with_where(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE p.id > 1 WITH p RETURN p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0 WHERE (t0.id > 1)) with0",
+            sql,
+        )
+
+    def test_parse_and_render_with_whole_query_aggregate_without_grouping(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH count(m) AS total RETURN total")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT with0.total FROM (SELECT COUNT(t1.id) AS total FROM \"people\" t0 "
+            "INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id) with0",
+            sql,
+        )
+
+    def test_parse_and_render_post_with_where_against_passed_through_node(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WITH p WHERE p.id > 1 RETURN p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0) with0 WHERE (with0.id > 1)",
+            sql,
+        )
+
+    def test_parse_and_render_with_distinct(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH DISTINCT p RETURN p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT with0.name FROM (SELECT DISTINCT t0.* FROM \"people\" t0 "
+            "INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id) with0",
+            sql,
+        )
+
+    def test_parse_and_render_with_own_order_by_and_limit_independent_of_return(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WITH p ORDER BY p.name LIMIT 1 RETURN p.name")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT with0.name FROM (SELECT t0.* FROM \"people\" t0 ORDER BY t0.name ASC LIMIT 1) with0",
+            sql,
+        )
+
+    def test_parse_raises_for_match_after_with(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WITH p MATCH (p)-[:ACTED_IN]->(m:Movie) RETURN m")
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual("MATCH after WITH is not supported yet.", str(context.exception))
+
+    def test_parse_raises_for_mixed_aggregation_in_with(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH p, count(m) AS total RETURN p, total")
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual(
+            "Aggregation grouping in WITH is not supported yet; all WITH items must be aggregate expressions, or none.",
+            str(context.exception),
+        )
+
+    def test_parse_raises_for_unaliased_computed_with_item(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WITH p.name RETURN p.name")
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual("WITH items must be aliased unless they pass through a plain variable.", str(context.exception))
+
+    def test_parse_raises_for_relationship_variable_passthrough_in_with(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[r:ACTED_IN]->(m:Movie) WITH r RETURN r")
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual(
+            "Relationship variables cannot be passed through WITH yet: r", str(context.exception)
+        )
+
+    def test_parse_raises_for_more_than_one_node_passthrough_in_with(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH p, m RETURN p")
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual(
+            "WITH can pass through at most one node variable unchanged; alias the rest to a scalar expression.",
+            str(context.exception),
         )
 
 

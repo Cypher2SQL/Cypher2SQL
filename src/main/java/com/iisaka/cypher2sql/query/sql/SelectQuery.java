@@ -7,7 +7,9 @@ import java.util.stream.Collectors;
 
 public final class SelectQuery implements Query<Grammar> {
     private final List<String> selectColumns = new ArrayList<>();
+    private boolean distinct;
     private String fromTable;
+    private SelectQuery fromSubquery;
     private String fromAlias;
     private final List<JoinClause> joins = new ArrayList<>();
     private final List<String> whereClauses = new ArrayList<>();
@@ -18,6 +20,13 @@ public final class SelectQuery implements Query<Grammar> {
     public static SelectQuery from(final String table, final String alias) {
         final SelectQuery select = new SelectQuery();
         select.fromTable = Objects.requireNonNull(table, "table");
+        select.fromAlias = Objects.requireNonNull(alias, "alias");
+        return select;
+    }
+
+    public static SelectQuery fromSubquery(final SelectQuery subquery, final String alias) {
+        final SelectQuery select = new SelectQuery();
+        select.fromSubquery = Objects.requireNonNull(subquery, "subquery");
         select.fromAlias = Objects.requireNonNull(alias, "alias");
         return select;
     }
@@ -33,8 +42,25 @@ public final class SelectQuery implements Query<Grammar> {
         return this;
     }
 
+    public SelectQuery setDistinct() {
+        this.distinct = true;
+        return this;
+    }
+
     public SelectQuery addJoin(final JoinClause join) {
         joins.add(Objects.requireNonNull(join, "join"));
+        return this;
+    }
+
+    public SelectQuery andLastJoinCondition(final String extraCondition) {
+        Objects.requireNonNull(extraCondition, "extraCondition");
+        if (joins.isEmpty()) {
+            throw new IllegalStateException("No join to amend.");
+        }
+        final int lastIndex = joins.size() - 1;
+        final JoinClause last = joins.get(lastIndex);
+        joins.set(lastIndex, new JoinClause(
+                last.joinType(), last.table(), last.alias(), last.onCondition() + " AND (" + extraCondition + ")"));
         return this;
     }
 
@@ -60,8 +86,12 @@ public final class SelectQuery implements Query<Grammar> {
 
     @Override
     public String render(final Grammar grammar) {
-        final String selectClause = "SELECT " + String.join(", ", selectColumns);
-        final String fromClause = "FROM " + grammar.quoteIdentifier(fromTable) + " " + fromAlias;
+        final String selectClause = distinct
+                ? "SELECT DISTINCT " + String.join(", ", selectColumns)
+                : "SELECT " + String.join(", ", selectColumns);
+        final String fromClause = fromSubquery == null
+                ? "FROM " + grammar.quoteIdentifier(fromTable) + " " + fromAlias
+                : "FROM (" + fromSubquery.render(grammar) + ") " + fromAlias;
         final String joinClause = joins.stream()
                 .map(join -> join.joinType().name() + " JOIN "
                         + grammar.quoteIdentifier(join.table()) + " " + join.alias()
