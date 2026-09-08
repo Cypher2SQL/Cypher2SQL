@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .cypher_query import (
@@ -11,6 +11,7 @@ from .cypher_query import (
     Expression,
     FunctionExpression,
     Node,
+    OrderItem,
     ProjectionItem,
     PropertyExpression,
     UnaryExpression,
@@ -73,34 +74,41 @@ class BoundTraversal:
     left: BoundNode
     right: BoundNode
 
-    def apply_to(self, select: SelectQuery, next_join_alias_counter: list[int]) -> list[str]:
+    def apply_to(
+        self,
+        select: SelectQuery,
+        next_join_alias_counter: list[int],
+        join_type: JoinType = JoinType.INNER,
+    ) -> list[str]:
         if self.mapping.relationship_kind is RelationshipKind.JOIN_TABLE:
-            return self._apply_join_table(select, next_join_alias_counter)
+            return self._apply_join_table(select, next_join_alias_counter, join_type)
         if self.mapping.relationship_kind is RelationshipKind.SELF_REFERENTIAL:
-            return self._apply_self_referential(select)
+            return self._apply_self_referential(select, join_type)
         if self.mapping.relationship_kind in (RelationshipKind.ONE_TO_MANY, RelationshipKind.MANY_TO_ONE):
-            return self._apply_one_to_many(select)
+            return self._apply_one_to_many(select, join_type)
         raise ValueError(f"Unknown relationship kind: {self.mapping.relationship_kind}")
 
-    def _apply_join_table(self, select: SelectQuery, next_join_alias_counter: list[int]) -> list[str]:
+    def _apply_join_table(
+        self, select: SelectQuery, next_join_alias_counter: list[int], join_type: JoinType
+    ) -> list[str]:
         join_alias = f"j{next_join_alias_counter[0]}"
         next_join_alias_counter[0] += 1
         join_on_left = _join_on_columns(self.left.alias, self.left.mapping.primary_keys, join_alias, self.mapping.from_join_keys)
-        select.add_join(JoinClause(JoinType.INNER, self.mapping.join_table, join_alias, join_on_left))
+        select.add_join(JoinClause(join_type, self.mapping.join_table, join_alias, join_on_left))
 
         join_on_right = _join_on_columns(join_alias, self.mapping.to_join_keys, self.right.alias, self.right.mapping.primary_keys)
-        select.add_join(JoinClause(JoinType.INNER, self.right.mapping.qualified_table, self.right.alias, join_on_right))
+        select.add_join(JoinClause(join_type, self.right.mapping.qualified_table, self.right.alias, join_on_right))
         return [f"{join_alias}.*"]
 
-    def _apply_self_referential(self, select: SelectQuery) -> list[str]:
+    def _apply_self_referential(self, select: SelectQuery, join_type: JoinType) -> list[str]:
         join_on = _join_on_columns(self.left.alias, self.mapping.from_keys, self.right.alias, self.mapping.to_keys)
-        select.add_join(JoinClause(JoinType.INNER, self.left.mapping.qualified_table, self.right.alias, join_on))
+        select.add_join(JoinClause(join_type, self.left.mapping.qualified_table, self.right.alias, join_on))
         return [
             *[f"{self.left.alias}.{column}" for column in self.mapping.from_keys],
             *[f"{self.right.alias}.{column}" for column in self.mapping.to_keys],
         ]
 
-    def _apply_one_to_many(self, select: SelectQuery) -> list[str]:
+    def _apply_one_to_many(self, select: SelectQuery, join_type: JoinType) -> list[str]:
         left_is_parent = self.left.label == self.mapping.from_label and self.right.label == self.mapping.to_label
         right_is_parent = self.right.label == self.mapping.from_label and self.left.label == self.mapping.to_label
         if left_is_parent:
@@ -112,7 +120,7 @@ class BoundTraversal:
                     self.mapping.parent_primary_keys,
                 )
             )
-            select.add_join(JoinClause(JoinType.INNER, self.right.mapping.qualified_table, self.right.alias, join_on))
+            select.add_join(JoinClause(join_type, self.right.mapping.qualified_table, self.right.alias, join_on))
             return [
                 *[f"{self.right.alias}.{column}" for column in self.mapping.child_foreign_keys],
                 *[f"{self.left.alias}.{column}" for column in self.mapping.parent_primary_keys],
@@ -126,7 +134,7 @@ class BoundTraversal:
                     self.mapping.parent_primary_keys,
                 )
             )
-            select.add_join(JoinClause(JoinType.INNER, self.right.mapping.qualified_table, self.right.alias, join_on))
+            select.add_join(JoinClause(join_type, self.right.mapping.qualified_table, self.right.alias, join_on))
             return [
                 *[f"{self.left.alias}.{column}" for column in self.mapping.child_foreign_keys],
                 *[f"{self.right.alias}.{column}" for column in self.mapping.parent_primary_keys],
@@ -138,6 +146,7 @@ class BoundTraversal:
 class BoundPattern:
     nodes: list[BoundNode]
     traversals: list[BoundTraversal]
+    is_optional: bool = False
 
     def __post_init__(self) -> None:
         if len(self.nodes) != len(self.traversals) + 1:
@@ -149,22 +158,88 @@ class BoundPattern:
             raise ValueError("BoundPattern has no nodes.")
         return self.nodes[0]
 
-    def alias_for_variable(self, variable: str | None) -> str | None:
-        if not variable:
-            return None
-        for node in self.nodes:
-            if node.variable == variable:
-                return node.alias
-        return None
 
-    def as_sql(self, where_expression: Expression | None, projection_items: list[ProjectionItem]) -> SelectQuery:
-        select = SelectQuery.select_from(self.root.mapping.qualified_table, self.root.alias)
-        next_join_alias_counter = [len(self.nodes)]
+@dataclass(frozen=True)
+class ReadQuery:
+    patterns: list[BoundPattern]
+    where_expression: Expression | None
+    projection_items: list[ProjectionItem]
+    order_items: list[OrderItem] = field(default_factory=list)
+    skip: int | None = None
+    limit: int | None = None
+
+    @property
+    def pattern_count(self) -> int:
+        return len(self.patterns)
+
+    def pattern_at(self, index: int) -> BoundPattern:
+        return self.patterns[index]
+
+    def as_sql(self) -> SelectQuery:
+        if not self.patterns:
+            raise ValueError("No patterns parsed from Cypher query.")
+        if self.patterns[0].is_optional:
+            raise NotImplementedError("OPTIONAL MATCH cannot be the first clause yet.")
+
+        aliases_by_variable: dict[str, str] = {}
+        nodes_by_alias: dict[str, BoundNode] = {}
+        self._register_nodes(self.patterns[0], aliases_by_variable, nodes_by_alias)
+        for pattern in self.patterns[1:]:
+            if not pattern.is_optional:
+                raise NotImplementedError(
+                    f"Multiple top-level MATCH patterns are not supported yet. Found: {len(self.patterns)}"
+                )
+            root_variable = pattern.root.variable
+            if not root_variable or root_variable not in aliases_by_variable:
+                raise NotImplementedError(
+                    "OPTIONAL MATCH must reference a variable already bound by a preceding MATCH clause."
+                )
+            self._register_nodes(pattern, aliases_by_variable, nodes_by_alias)
+
+        base_pattern = self.patterns[0]
+        select = SelectQuery.select_from(base_pattern.root.mapping.qualified_table, base_pattern.root.alias)
+        next_join_alias_counter = [len(nodes_by_alias)]
         edge_projections: dict[str, list[str]] = {}
         edge_property_projections: dict[str, dict[str, str]] = {}
 
-        for traversal in self.traversals:
-            projection = traversal.apply_to(select, next_join_alias_counter)
+        self._apply_traversals(base_pattern, select, JoinType.INNER, next_join_alias_counter, edge_projections, edge_property_projections)
+        for pattern in self.patterns[1:]:
+            self._apply_traversals(pattern, select, JoinType.LEFT, next_join_alias_counter, edge_projections, edge_property_projections)
+
+        self._apply_where(select, self.where_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
+        self._apply_return_projection(
+            select, self.projection_items, base_pattern.root, aliases_by_variable, nodes_by_alias,
+            edge_projections, edge_property_projections,
+        )
+        self._apply_order_by(select, self.order_items, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
+        if self.limit is not None:
+            select.set_limit(self.limit)
+        if self.skip is not None:
+            select.set_offset(self.skip)
+        return select
+
+    @staticmethod
+    def _register_nodes(
+        pattern: BoundPattern,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
+    ) -> None:
+        for node in pattern.nodes:
+            nodes_by_alias.setdefault(node.alias, node)
+            if node.variable:
+                aliases_by_variable.setdefault(node.variable, node.alias)
+
+    @staticmethod
+    def _apply_traversals(
+        pattern: BoundPattern,
+        select: SelectQuery,
+        join_type: JoinType,
+        next_join_alias_counter: list[int],
+        edge_projections: dict[str, list[str]],
+        edge_property_projections: dict[str, dict[str, str]],
+    ) -> None:
+        for traversal in pattern.traversals:
+            projection = traversal.apply_to(select, next_join_alias_counter, join_type)
             if traversal.edge.variable:
                 edge_projections[traversal.edge.variable] = projection
                 if (
@@ -178,29 +253,32 @@ class BoundPattern:
                         for prop, mapping in traversal.mapping.properties.items()
                     }
 
-        self._apply_where(select, where_expression, edge_projections, edge_property_projections)
-        self._apply_return_projection(select, projection_items, edge_projections, edge_property_projections)
-        return select
-
     def _apply_where(
         self,
         select: SelectQuery,
         where_expression: Expression | None,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
         edge_projections: dict[str, list[str]],
         edge_property_projections: dict[str, dict[str, str]],
     ) -> None:
         if where_expression is not None:
-            select.add_where(self._render_expression(where_expression, edge_projections, edge_property_projections, False))
+            select.add_where(self._render_expression(
+                where_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            ))
 
     def _apply_return_projection(
         self,
         select: SelectQuery,
         projection_items: list[ProjectionItem],
+        default_root: BoundNode,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
         edge_projections: dict[str, list[str]],
         edge_property_projections: dict[str, dict[str, str]],
     ) -> None:
         if not projection_items:
-            select.add_select_column(f"{self.root.alias}.*")
+            select.add_select_column(f"{default_root.alias}.*")
             return
         for item in projection_items:
             if isinstance(item.expression, VariableExpression):
@@ -209,33 +287,58 @@ class BoundPattern:
                     for column in edge_columns:
                         select.add_select_column(column)
                     continue
-            rendered = self._render_expression(item.expression, edge_projections, edge_property_projections, True)
+            rendered = self._render_expression(
+                item.expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, True
+            )
             select.add_select_column(rendered if item.alias is None else f"{rendered} AS {item.alias}")
+
+    def _apply_order_by(
+        self,
+        select: SelectQuery,
+        order_items: list[OrderItem],
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
+        edge_projections: dict[str, list[str]],
+        edge_property_projections: dict[str, dict[str, str]],
+    ) -> None:
+        for order_item in order_items:
+            rendered = self._render_expression(
+                order_item.expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            )
+            select.add_order_by(f"{rendered} DESC" if order_item.descending else f"{rendered} ASC")
 
     def _render_expression(
         self,
         expression: Expression,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
         edge_projections: dict[str, list[str]],
         edge_property_projections: dict[str, dict[str, str]],
         top_level_projection: bool,
     ) -> str:
         if isinstance(expression, VariableExpression):
-            return self._render_variable(expression.name, edge_projections, top_level_projection)
+            return self._render_variable(expression.name, aliases_by_variable, nodes_by_alias, edge_projections, top_level_projection)
         if isinstance(expression, PropertyExpression):
-            return self._render_property(expression, edge_projections, edge_property_projections)
+            return self._render_property(expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
         if isinstance(expression, ConstantExpression):
             return self._render_constant(expression.value)
         if isinstance(expression, FunctionExpression):
-            return self._render_function(expression, edge_projections, edge_property_projections)
+            return self._render_function(expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
         if isinstance(expression, BinaryExpression):
-            left = self._render_expression(expression.left, edge_projections, edge_property_projections, False)
-            right = self._render_expression(expression.right, edge_projections, edge_property_projections, False)
+            left = self._render_expression(
+                expression.left, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            )
+            right = self._render_expression(
+                expression.right, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            )
             return f"({left} {expression.operator} {right})"
         if isinstance(expression, UnaryExpression):
-            operand = self._render_expression(expression.operand, edge_projections, edge_property_projections, False)
+            operand = self._render_expression(
+                expression.operand, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            )
             return f"({expression.operator} {operand})"
         if isinstance(expression, CaseExpression):
-            return self._render_case(expression, edge_projections, edge_property_projections)
+            return self._render_case(expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections)
         if isinstance(expression, WildcardExpression):
             return "*"
         raise ValueError(f"Unsupported expression: {expression}")
@@ -243,32 +346,38 @@ class BoundPattern:
     def _render_property(
         self,
         property_expression: PropertyExpression,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
         edge_projections: dict[str, list[str]],
         edge_property_projections: dict[str, dict[str, str]],
     ) -> str:
         if isinstance(property_expression.receiver, VariableExpression):
             variable = property_expression.receiver.name
-            alias = self.alias_for_variable(variable)
+            alias = aliases_by_variable.get(variable)
             if alias is not None:
-                return self._node_for_alias(alias).mapping.qualified_column(alias, property_expression.property)
+                return nodes_by_alias[alias].mapping.qualified_column(alias, property_expression.property)
             edge_properties = edge_property_projections.get(variable)
             if edge_properties is not None and property_expression.property in edge_properties:
                 return edge_properties[property_expression.property]
             if variable not in edge_projections:
                 raise ValueError(f"RETURN references unknown variable: {variable}")
             raise ValueError(f"RETURN edge properties are not supported yet: {variable}.{property_expression.property}")
-        receiver = self._render_expression(property_expression.receiver, edge_projections, edge_property_projections, False)
+        receiver = self._render_expression(
+            property_expression.receiver, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+        )
         return f"{receiver}.{property_expression.property}"
 
     def _render_variable(
         self,
         variable: str,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
         edge_projections: dict[str, list[str]],
         top_level_projection: bool,
     ) -> str:
-        alias = self.alias_for_variable(variable)
+        alias = aliases_by_variable.get(variable)
         if alias is not None:
-            node = self._node_for_alias(alias)
+            node = nodes_by_alias[alias]
             if top_level_projection:
                 return f"{alias}.*"
             return node.mapping.qualified_primary_key(alias)
@@ -288,6 +397,8 @@ class BoundPattern:
     def _render_function(
         self,
         function: FunctionExpression,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
         edge_projections: dict[str, list[str]],
         edge_property_projections: dict[str, dict[str, str]],
     ) -> str:
@@ -295,7 +406,9 @@ class BoundPattern:
         if sql_name is None:
             raise NotImplementedError(f"Function is parsed but not rendered yet: {function.name}")
         arguments = [
-            self._render_expression(argument, edge_projections, edge_property_projections, False)
+            self._render_expression(
+                argument, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            )
             for argument in function.arguments
         ]
         return f"{sql_name}({', '.join(arguments)})"
@@ -303,20 +416,30 @@ class BoundPattern:
     def _render_case(
         self,
         expression: CaseExpression,
+        aliases_by_variable: dict[str, str],
+        nodes_by_alias: dict[str, BoundNode],
         edge_projections: dict[str, list[str]],
         edge_property_projections: dict[str, dict[str, str]],
     ) -> str:
         parts = ["CASE"]
         if expression.subject is not None:
-            parts.append(self._render_expression(expression.subject, edge_projections, edge_property_projections, False))
+            parts.append(self._render_expression(
+                expression.subject, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            ))
         for when_expression, then_expression in expression.when_thens:
             parts.append("WHEN")
-            parts.append(self._render_expression(when_expression, edge_projections, edge_property_projections, False))
+            parts.append(self._render_expression(
+                when_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            ))
             parts.append("THEN")
-            parts.append(self._render_expression(then_expression, edge_projections, edge_property_projections, False))
+            parts.append(self._render_expression(
+                then_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            ))
         if expression.else_expression is not None:
             parts.append("ELSE")
-            parts.append(self._render_expression(expression.else_expression, edge_projections, edge_property_projections, False))
+            parts.append(self._render_expression(
+                expression.else_expression, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False
+            ))
         parts.append("END")
         return " ".join(parts)
 
@@ -330,33 +453,6 @@ class BoundPattern:
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)
-
-    def _node_for_alias(self, alias: str) -> BoundNode:
-        for node in self.nodes:
-            if node.alias == alias:
-                return node
-        raise ValueError(f"No node bound for alias: {alias}")
-
-
-@dataclass(frozen=True)
-class ReadQuery:
-    patterns: list[BoundPattern]
-    where_expression: Expression | None
-    projection_items: list[ProjectionItem]
-
-    @property
-    def pattern_count(self) -> int:
-        return len(self.patterns)
-
-    def pattern_at(self, index: int) -> BoundPattern:
-        return self.patterns[index]
-
-    def as_sql(self) -> SelectQuery:
-        if not self.patterns:
-            raise ValueError("No patterns parsed from Cypher query.")
-        if len(self.patterns) > 1:
-            raise NotImplementedError(f"Multiple top-level MATCH patterns are not supported yet. Found: {len(self.patterns)}")
-        return self.patterns[0].as_sql(self.where_expression, self.projection_items)
 
 
 def _join_on_columns(left_alias: str, left_columns: list[str], right_alias: str, right_columns: list[str]) -> str:

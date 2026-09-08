@@ -11,6 +11,9 @@ public final class SelectQuery implements Query<Grammar> {
     private String fromAlias;
     private final List<JoinClause> joins = new ArrayList<>();
     private final List<String> whereClauses = new ArrayList<>();
+    private final List<String> orderByColumns = new ArrayList<>();
+    private Long limit;
+    private Long offset;
 
     public static SelectQuery from(final String table, final String alias) {
         final SelectQuery select = new SelectQuery();
@@ -40,6 +43,21 @@ public final class SelectQuery implements Query<Grammar> {
         return this;
     }
 
+    public SelectQuery addOrderBy(final String clause) {
+        orderByColumns.add(Objects.requireNonNull(clause, "clause"));
+        return this;
+    }
+
+    public SelectQuery setLimit(final long limit) {
+        this.limit = limit;
+        return this;
+    }
+
+    public SelectQuery setOffset(final long offset) {
+        this.offset = offset;
+        return this;
+    }
+
     @Override
     public String render(final Grammar grammar) {
         final String selectClause = "SELECT " + String.join(", ", selectColumns);
@@ -52,8 +70,24 @@ public final class SelectQuery implements Query<Grammar> {
         final String whereClause = whereClauses.isEmpty()
                 ? ""
                 : "WHERE " + String.join(" AND ", whereClauses);
-        return java.util.stream.Stream.of(selectClause, fromClause, joinClause, whereClause)
+        final String orderByClause = orderByColumns.isEmpty()
+                ? ""
+                : "ORDER BY " + String.join(", ", orderByColumns);
+        final String limitOffsetClause = renderLimitOffset();
+        return java.util.stream.Stream.of(selectClause, fromClause, joinClause, whereClause, orderByClause, limitOffsetClause)
                 .filter(part -> !part.isBlank())
                 .collect(Collectors.joining(" "));
+    }
+
+    private String renderLimitOffset() {
+        if (limit == null && offset == null) {
+            return "";
+        }
+        final StringBuilder clause = new StringBuilder();
+        clause.append("LIMIT ").append(limit == null ? -1 : limit);
+        if (offset != null) {
+            clause.append(" OFFSET ").append(offset);
+        }
+        return clause.toString();
     }
 }

@@ -421,5 +421,299 @@ class IntegrationTest(unittest.TestCase):
             sql,
         )
 
+    def test_parse_and_render_order_by_ascending_by_default(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN p ORDER BY p.id")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 ORDER BY t0.id ASC", sql)
+
+    def test_parse_and_render_order_by_descending(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN p ORDER BY p.id DESC")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 ORDER BY t0.id DESC", sql)
+
+    def test_parse_and_render_order_by_multiple_columns_with_mixed_direction(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN p ORDER BY p.name ASC, p.id DESC")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 ORDER BY t0.name ASC, t0.id DESC", sql)
+
+    def test_parse_and_render_order_by_on_bare_variable(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN p ORDER BY p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 ORDER BY t0.id ASC", sql)
+
+    def test_parse_and_render_limit(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN p LIMIT 5")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 LIMIT 5", sql)
+
+    def test_parse_and_render_skip_as_unlimited_offset(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN p SKIP 5")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 LIMIT -1 OFFSET 5", sql)
+
+    def test_parse_and_render_limit_with_skip(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN p SKIP 2 LIMIT 5")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 LIMIT 5 OFFSET 2", sql)
+
+    def test_parse_raises_for_non_literal_limit(self) -> None:
+        with self.assertRaises(NotImplementedError) as context:
+            Query.parse("MATCH (p:Person) RETURN p LIMIT p.id")
+
+        self.assertEqual("LIMIT must be an integer literal; parameters are not supported yet.", str(context.exception))
+
+    def test_parse_raises_for_non_literal_skip(self) -> None:
+        with self.assertRaises(NotImplementedError) as context:
+            Query.parse("MATCH (p:Person) RETURN p SKIP p.id")
+
+        self.assertEqual("SKIP must be an integer literal; parameters are not supported yet.", str(context.exception))
+
+    def test_parse_and_render_optional_match_as_left_join(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+          - type: AUTHORED
+            kind: ONE_TO_MANY
+            parentLabel: Person
+            childLabel: Movie
+            parentPrimaryKey: id
+            childForeignKey: author_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse(
+            "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) RETURN p"
+        )
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT t0.* FROM \"people\" t0 INNER JOIN \"people_movies\" j3 ON t0.id = j3.person_id "
+            "INNER JOIN \"movies\" t1 ON j3.movie_id = t1.id "
+            "LEFT JOIN \"people\" t2 ON t1.author_id = t2.id",
+            sql,
+        )
+
+    def test_parse_and_render_variable_bound_only_by_optional_match(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+          - type: AUTHORED
+            kind: ONE_TO_MANY
+            parentLabel: Person
+            childLabel: Movie
+            parentPrimaryKey: id
+            childForeignKey: author_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse(
+            "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) RETURN a"
+        )
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT t2.* FROM \"people\" t0 INNER JOIN \"people_movies\" j3 ON t0.id = j3.person_id "
+            "INNER JOIN \"movies\" t1 ON j3.movie_id = t1.id "
+            "LEFT JOIN \"people\" t2 ON t1.author_id = t2.id",
+            sql,
+        )
+
+    def test_parse_raises_for_optional_match_on_unbound_variable(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+          - type: AUTHORED
+            kind: ONE_TO_MANY
+            parentLabel: Person
+            childLabel: Movie
+            parentPrimaryKey: id
+            childForeignKey: author_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse(
+            "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (a:Person)-[:AUTHORED]->(other:Movie) RETURN p"
+        )
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual(
+            "OPTIONAL MATCH must reference a variable already bound by a preceding MATCH clause.",
+            str(context.exception),
+        )
+
+    def test_parse_raises_for_leading_optional_match(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("OPTIONAL MATCH (p:Person) RETURN p")
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual("OPTIONAL MATCH cannot be the first clause yet.", str(context.exception))
+
+    def test_parse_raises_for_where_on_optional_match(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+          - type: AUTHORED
+            kind: ONE_TO_MANY
+            parentLabel: Person
+            childLabel: Movie
+            parentPrimaryKey: id
+            childForeignKey: author_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse(
+            "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) "
+            "WHERE a.id > 1 RETURN p"
+        )
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_read_query(query)
+
+        self.assertEqual("WHERE on OPTIONAL MATCH is not supported yet.", str(context.exception))
+
+    def test_parse_raises_for_two_non_optional_match_clauses(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) MATCH (m:Movie) RETURN p, m")
+
+        with self.assertRaises(NotImplementedError) as context:
+            Mapping(schema).to_sql(query)
+
+        self.assertEqual(
+            "Multiple top-level MATCH patterns are not supported yet. Found: 2", str(context.exception)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

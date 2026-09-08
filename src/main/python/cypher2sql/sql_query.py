@@ -38,6 +38,9 @@ class SelectQuery(Renderable):
     from_alias: str | None = None
     joins: list[JoinClause] = field(default_factory=list)
     where_clauses: list[str] = field(default_factory=list)
+    order_by_columns: list[str] = field(default_factory=list)
+    limit: int | None = None
+    offset: int | None = None
 
     @classmethod
     def select_from(cls, table: str, alias: str) -> Self:
@@ -64,6 +67,18 @@ class SelectQuery(Renderable):
         self.where_clauses.append(clause)
         return self
 
+    def add_order_by(self, clause: str) -> Self:
+        self.order_by_columns.append(clause)
+        return self
+
+    def set_limit(self, limit: int) -> Self:
+        self.limit = limit
+        return self
+
+    def set_offset(self, offset: int) -> Self:
+        self.offset = offset
+        return self
+
     def render(self, grammar: Grammar) -> str:
         select_clause = "SELECT " + ", ".join(self.select_columns)
         from_clause = f"FROM {grammar.quote_identifier(self.from_table)} {self.from_alias}"
@@ -72,7 +87,19 @@ class SelectQuery(Renderable):
             for join in self.joins
         )
         where_clause = "" if not self.where_clauses else "WHERE " + " AND ".join(self.where_clauses)
-        return " ".join(part for part in (select_clause, from_clause, join_clause, where_clause) if part).strip()
+        order_by_clause = "" if not self.order_by_columns else "ORDER BY " + ", ".join(self.order_by_columns)
+        limit_offset_clause = self._render_limit_offset()
+        return " ".join(
+            part for part in (select_clause, from_clause, join_clause, where_clause, order_by_clause, limit_offset_clause) if part
+        ).strip()
+
+    def _render_limit_offset(self) -> str:
+        if self.limit is None and self.offset is None:
+            return ""
+        clause = f"LIMIT {self.limit if self.limit is not None else -1}"
+        if self.offset is not None:
+            clause += f" OFFSET {self.offset}"
+        return clause
 
 
 @dataclass

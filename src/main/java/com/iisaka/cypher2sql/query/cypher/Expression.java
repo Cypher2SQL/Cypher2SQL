@@ -336,7 +336,10 @@ public sealed interface Expression permits Expression.VariableExpression,
             if (text.startsWith("0o") || text.startsWith("0O")) {
                 return Long.parseLong(text.substring(2), 8);
             }
-            return text.contains(".") ? Double.valueOf(text) : Long.valueOf(text);
+            if (text.contains(".")) {
+                return Double.valueOf(text);
+            }
+            return Long.valueOf(text);
         }
 
         private String parseStringLiteral(final String text) {
@@ -530,7 +533,10 @@ public sealed interface Expression permits Expression.VariableExpression,
         }
 
         private Object parseNumber(final String text) {
-            return text.contains(".") ? Double.valueOf(text) : Long.valueOf(text);
+            if (text.contains(".")) {
+                return Double.valueOf(text);
+            }
+            return Long.valueOf(text);
         }
 
         private boolean matchKeyword(final String keyword) {

@@ -47,3 +47,10 @@ edges:
     parentPrimaryKey: id
     childForeignKey: author_id
     cardinality: ONE_TO_MANY
+  - type: DIRECTED
+    kind: ONE_TO_MANY
+    parentLabel: Person
+    childLabel: Movie
+    parentPrimaryKey: id
+    childForeignKey: director_id
+    cardinality: ONE_TO_MANY

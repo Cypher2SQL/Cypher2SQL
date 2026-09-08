@@ -468,4 +468,152 @@ class QueryTest {
         assertTrue(query.withProjectionItems().get(0).expression() instanceof Expression.PropertyExpression);
         assertTrue(query.withWhereExpression() instanceof Expression.BinaryExpression);
     }
+
+    @Test
+    void rendersOrderByAscendingByDefault() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN p ORDER BY p.id");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 ORDER BY t0.id ASC", sql);
+    }
+
+    @Test
+    void rendersOrderByDescending() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN p ORDER BY p.id DESC");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 ORDER BY t0.id DESC", sql);
+    }
+
+    @Test
+    void rendersOrderByMultipleColumnsWithMixedDirection() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN p ORDER BY p.name ASC, p.id DESC");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 ORDER BY t0.name ASC, t0.id DESC", sql);
+    }
+
+    @Test
+    void rendersOrderByOnBareVariable() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN p ORDER BY p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 ORDER BY t0.id ASC", sql);
+    }
+
+    @Test
+    void rendersLimit() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN p LIMIT 5");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 LIMIT 5", sql);
+    }
+
+    @Test
+    void rendersSkipAsUnlimitedOffset() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN p SKIP 5");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 LIMIT -1 OFFSET 5", sql);
+    }
+
+    @Test
+    void rendersLimitWithSkip() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN p SKIP 2 LIMIT 5");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 LIMIT 5 OFFSET 2", sql);
+    }
+
+    @Test
+    void throwsForNonLiteralLimit() {
+        final Exception exception = assertThrows(UnsupportedOperationException.class,
+                () -> Query.of("MATCH (p:Person) RETURN p LIMIT p.id"));
+
+        assertEquals("LIMIT must be an integer literal; parameters are not supported yet.", exception.getMessage());
+    }
+
+    @Test
+    void throwsForNonLiteralSkip() {
+        final Exception exception = assertThrows(UnsupportedOperationException.class,
+                () -> Query.of("MATCH (p:Person) RETURN p SKIP p.id"));
+
+        assertEquals("SKIP must be an integer literal; parameters are not supported yet.", exception.getMessage());
+    }
+
+    @Test
+    void rendersOptionalMatchAsLeftJoin() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of(
+                "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT t0.* FROM \"people\" t0 INNER JOIN \"people_movies\" j3 ON t0.id = j3.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j3.movie_id = t1.id "
+                        + "LEFT JOIN \"people\" t2 ON t1.author_id = t2.id",
+                sql
+        );
+    }
+
+    @Test
+    void returnsVariableBoundOnlyByOptionalMatch() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of(
+                "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) RETURN a");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT t2.* FROM \"people\" t0 INNER JOIN \"people_movies\" j3 ON t0.id = j3.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j3.movie_id = t1.id "
+                        + "LEFT JOIN \"people\" t2 ON t1.author_id = t2.id",
+                sql
+        );
+    }
+
+    @Test
+    void throwsForOptionalMatchOnUnboundVariable() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of(
+                "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (a:Person)-[:AUTHORED]->(other:Movie) RETURN p");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals(
+                "OPTIONAL MATCH must reference a variable already bound by a preceding MATCH clause.",
+                exception.getMessage());
+    }
+
+    @Test
+    void throwsForLeadingOptionalMatch() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("OPTIONAL MATCH (p:Person) RETURN p");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals("OPTIONAL MATCH cannot be the first clause yet.", exception.getMessage());
+    }
+
+    @Test
+    void throwsForWhereOnOptionalMatch() {
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> Query.of(
+                "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) OPTIONAL MATCH (m)<-[:AUTHORED]-(a:Person) "
+                        + "WHERE a.id > 1 RETURN p").asReadQuery(SchemaDefinition.fromYamlResource("schema.yaml")));
+
+        assertEquals("WHERE on OPTIONAL MATCH is not supported yet.", exception.getMessage());
+    }
+
+    @Test
+    void throwsForTwoNonOptionalMatchClauses() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) MATCH (m:Movie) RETURN p, m");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals("Multiple top-level MATCH patterns are not supported yet. Found: 2", exception.getMessage());
+    }
 }

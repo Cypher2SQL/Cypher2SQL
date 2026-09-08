@@ -43,6 +43,8 @@ class Edge:
 class Pattern:
     nodes: list[Node]
     edges: list[Edge]
+    is_optional: bool = False
+    local_where_expression: Expression | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,12 @@ class ProjectionItem:
     alias: str | None = None
 
 
+@dataclass(frozen=True)
+class OrderItem:
+    expression: Expression
+    descending: bool
+
+
 class Query:
     def __init__(
         self,
@@ -128,6 +136,9 @@ class Query:
         with_projection_items: list[ProjectionItem] | None = None,
         with_where_expression: Expression | None = None,
         has_variable_length_traversal: bool | None = None,
+        order_items: list[OrderItem] | None = None,
+        skip: int | None = None,
+        limit: int | None = None,
     ) -> None:
         self._raw = raw
         self._patterns = list(patterns)
@@ -142,6 +153,9 @@ class Query:
         self._has_variable_length_traversal = (
             ("[*" in raw) if has_variable_length_traversal is None else has_variable_length_traversal
         )
+        self._order_items = [] if order_items is None else list(order_items)
+        self._skip = skip
+        self._limit = limit
 
     @property
     def raw(self) -> str:
@@ -183,6 +197,18 @@ class Query:
     def has_variable_length_traversal(self) -> bool:
         return self._has_variable_length_traversal
 
+    @property
+    def order_items(self) -> list[OrderItem]:
+        return list(self._order_items)
+
+    @property
+    def skip(self) -> int | None:
+        return self._skip
+
+    @property
+    def limit(self) -> int | None:
+        return self._limit
+
     @classmethod
     def parse(cls, cypher: str) -> "Query":
         parse_tree, parser = _parse(cypher)
@@ -192,10 +218,13 @@ class Query:
             patterns,
             parse_tree,
             _extract_projection_items(parser, parse_tree, in_with=False),
-            _extract_where_expression(parser, parse_tree, in_with=False),
+            patterns[0].local_where_expression if patterns else None,
             _extract_projection_items(parser, parse_tree, in_with=True),
-            _extract_where_expression(parser, parse_tree, in_with=True),
+            _extract_with_where_expression(parser, parse_tree),
             _has_variable_length_traversal(parser, parse_tree),
+            _extract_order_items(parser, parse_tree),
+            _extract_skip(parser, parse_tree),
+            _extract_limit(parser, parse_tree),
         )
 
 
@@ -238,12 +267,12 @@ def _extract_projection_items(parser: Any, parse_tree: Any, in_with: bool) -> li
     return return_items
 
 
-def _extract_where_expression(parser: Any, parse_tree: Any, in_with: bool) -> Expression | None:
+def _extract_with_where_expression(parser: Any, parse_tree: Any) -> Expression | None:
     stack: list[Any] = [parse_tree]
     while stack:
         current = stack.pop()
         rule_name = _rule_name(parser, current)
-        if rule_name is not None and _normalized_rule_name(rule_name) == "where" and _is_with_context(current) == in_with:
+        if rule_name is not None and _normalized_rule_name(rule_name) == "where" and _is_with_context(current):
             for idx in range(getattr(current, "getChildCount", lambda: 0)()):
                 child = current.getChild(idx)
                 if _rule_name(parser, child) == "expression":
@@ -256,32 +285,86 @@ def _extract_where_expression(parser: Any, parse_tree: Any, in_with: bool) -> Ex
     return None
 
 
-def _extract_patterns(parser: Any, parse_tree: Any) -> list[Pattern]:
-    roots = _find_pattern_elements(parser, parse_tree)
-    if not roots:
+def _find_first_by_rule_name(parser: Any, parse_tree: Any, rule_name: str) -> Any:
+    matches = _find_all_by_rule_name(parser, parse_tree, rule_name)
+    return matches[0] if matches else None
+
+
+def _projection_body(parser: Any, parse_tree: Any) -> Any:
+    return_st = _find_first_by_rule_name(parser, parse_tree, "returnSt")
+    if return_st is None:
+        return None
+    return return_st.projectionBody()
+
+
+def _extract_order_items(parser: Any, parse_tree: Any) -> list[OrderItem]:
+    projection_body = _projection_body(parser, parse_tree)
+    if projection_body is None or projection_body.orderSt() is None:
         return []
+    order_items: list[OrderItem] = []
+    for order_item in projection_body.orderSt().orderItem():
+        descending = order_item.DESC() is not None or order_item.DESCENDING() is not None
+        order_items.append(OrderItem(parse_expression(order_item.expression().getText()), descending))
+    return order_items
 
+
+def _extract_skip(parser: Any, parse_tree: Any) -> int | None:
+    projection_body = _projection_body(parser, parse_tree)
+    if projection_body is None or projection_body.skipSt() is None:
+        return None
+    return _require_integer_literal(parse_expression(projection_body.skipSt().expression().getText()), "SKIP")
+
+
+def _extract_limit(parser: Any, parse_tree: Any) -> int | None:
+    projection_body = _projection_body(parser, parse_tree)
+    if projection_body is None or projection_body.limitSt() is None:
+        return None
+    return _require_integer_literal(parse_expression(projection_body.limitSt().expression().getText()), "LIMIT")
+
+
+def _require_integer_literal(expression: Expression, clause: str) -> int:
+    if isinstance(expression, ConstantExpression) and isinstance(expression.value, int) and not isinstance(expression.value, bool):
+        return expression.value
+    raise NotImplementedError(f"{clause} must be an integer literal; parameters are not supported yet.")
+
+
+def _extract_patterns(parser: Any, parse_tree: Any) -> list[Pattern]:
+    match_clauses = _find_all_by_rule_name(parser, parse_tree, "matchSt")
     patterns: list[Pattern] = []
-    for root in roots:
-        node_contexts: list[Any] = []
-        relationship_contexts: list[Any] = []
-        stack: list[Any] = [root]
-        while stack:
-            current = stack.pop()
-            rule_name = _rule_name(parser, current)
-            if rule_name == "nodePattern":
-                node_contexts.append(current)
-            elif rule_name == "relationshipPattern":
-                relationship_contexts.append(current)
-            child_count = getattr(current, "getChildCount", lambda: 0)()
-            for idx in range(child_count - 1, -1, -1):
-                stack.append(current.getChild(idx))
-        if not node_contexts:
-            continue
+    for match_clause in match_clauses:
+        optional = match_clause.OPTIONAL() is not None
+        pattern_where = match_clause.patternWhere()
+        where_ctx = pattern_where.where() if pattern_where is not None else None
+        local_where_expression = (
+            parse_expression(where_ctx.expression().getText()) if where_ctx is not None else None
+        )
+        pattern_ctx = pattern_where.pattern() if pattern_where is not None else None
+        roots = _find_pattern_elements(parser, pattern_ctx) if pattern_ctx is not None else []
+        for root in roots:
+            node_contexts: list[Any] = []
+            relationship_contexts: list[Any] = []
+            stack: list[Any] = [root]
+            while stack:
+                current = stack.pop()
+                rule_name = _rule_name(parser, current)
+                if rule_name == "nodePattern":
+                    node_contexts.append(current)
+                elif rule_name == "relationshipPattern":
+                    relationship_contexts.append(current)
+                child_count = getattr(current, "getChildCount", lambda: 0)()
+                for idx in range(child_count - 1, -1, -1):
+                    stack.append(current.getChild(idx))
+            if not node_contexts:
+                continue
 
-        nodes = [_parse_node_text(ctx.getText()) for ctx in node_contexts]
-        edges = [_parse_edge_text(ctx.getText()) for ctx in relationship_contexts]
-        patterns.append(Pattern(nodes=nodes, edges=edges))
+            nodes = [_parse_node_text(ctx.getText()) for ctx in node_contexts]
+            edges = [_parse_edge_text(ctx.getText()) for ctx in relationship_contexts]
+            patterns.append(Pattern(
+                nodes=nodes,
+                edges=edges,
+                is_optional=optional,
+                local_where_expression=local_where_expression,
+            ))
     return patterns
 
 
@@ -297,6 +380,19 @@ def _find_pattern_elements(parser: Any, parse_tree: Any) -> list[Any]:
         for idx in range(child_count - 1, -1, -1):
             stack.append(current.getChild(idx))
     return roots
+
+
+def _find_all_by_rule_name(parser: Any, parse_tree: Any, rule_name: str) -> list[Any]:
+    matches: list[Any] = []
+    stack: list[Any] = [parse_tree]
+    while stack:
+        current = stack.pop()
+        if _rule_name(parser, current) == rule_name:
+            matches.append(current)
+        child_count = getattr(current, "getChildCount", lambda: 0)()
+        for idx in range(child_count - 1, -1, -1):
+            stack.append(current.getChild(idx))
+    return matches
 
 
 def _rule_name(parser: Any, context: Any) -> str | None:

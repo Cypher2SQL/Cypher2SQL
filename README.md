@@ -289,8 +289,9 @@ Legend:
 | `WHERE` | Limited | SQL builder has `where` support; full Cypher predicate translation not complete |
 | `RETURN` | Limited | Parsing works for complete-query forms; projection translation is minimal |
 | `RETURN` aggregate functions (for example `count(*)`) | Planned (parsing verified) | ANTLR parsing is covered; SQL translation tests are currently disabled/skipped |
-| `ORDER BY` | Planned | Not translated yet |
-| `LIMIT` / `SKIP` | Planned | Not translated yet |
+| `ORDER BY` | Supported | Multiple sort keys, `ASC`/`DESC` |
+| `LIMIT` / `SKIP` | Supported | Integer literals only; `SKIP` without `LIMIT` renders `LIMIT -1 OFFSET n` |
+| `OPTIONAL MATCH` | Limited | Translates to `LEFT JOIN`; must share a variable with a preceding `MATCH`, and cannot carry its own `WHERE` yet |
 | `WITH` | Planned | Not translated yet |
 | `UNWIND` | Planned | Not translated yet |
 | `CREATE` | Placeholder | Write mode intentionally disabled |
@@ -420,9 +421,9 @@ Run `com.iisaka.Main` from your IDE, or add the Gradle `application` plugin if y
 ### Programmatic Example
 
 ```java
-final SchemaDefinition schema = SchemaDefinitionYaml.fromPath(Path.of("schema.yaml"));
-final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie)");
-final String sql = new Mapping(schema).toSql(query).render(new StandardGrammar());
+final SchemaDefinition schema = SchemaDefinition.fromYamlPath(Path.of("schema.yaml"));
+final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m");
+final String sql = query.asSql(schema).render(new StandardGrammar());
 ```
 
 ## Python Usage
@@ -461,7 +462,7 @@ from cypher2sql.schema import SchemaDefinition
 from cypher2sql.sql_query import StandardGrammar
 
 schema = SchemaDefinition.from_yaml_path("schema.yaml")
-query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m")
+query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m")
 sql = Mapping(schema).to_sql(query).render(StandardGrammar())
 print(sql)
 ```

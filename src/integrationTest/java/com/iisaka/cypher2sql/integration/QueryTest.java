@@ -16,6 +16,7 @@ import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class QueryTest {
@@ -40,6 +41,53 @@ class QueryTest {
                 assertEquals("Keanu Reeves", resultSet.getString(1));
                 assertEquals("Neo", resultSet.getString(2));
                 assertEquals("The Matrix", resultSet.getString(3));
+                assertFalse(resultSet.next());
+            }
+        }
+    }
+
+    @Test
+    void executesOrderByLimitAndSkipAgainstFreshDatabase() throws Exception {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource(SCHEMA_RESOURCE);
+        final Query query = Query.of("MATCH (p:Person) RETURN p.name ORDER BY p.name SKIP 1 LIMIT 1");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            executeSqlResource(connection, DATABASE_RESOURCE);
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(sql)) {
+                assertTrue(resultSet.next());
+                assertEquals("Keanu Reeves", resultSet.getString(1));
+                assertFalse(resultSet.next());
+            }
+        }
+    }
+
+    @Test
+    void executesOptionalMatchAsOuterJoinAgainstFreshDatabase() throws Exception {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource(SCHEMA_RESOURCE);
+        final Query query = Query.of(
+                "MATCH (p:Person) OPTIONAL MATCH (p)-[:DIRECTED]->(m:Movie) RETURN p.name, m.title ORDER BY p.name");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        try (Connection connection = DriverManager.getConnection("jdbc:sqlite::memory:")) {
+            executeSqlResource(connection, DATABASE_RESOURCE);
+
+            try (Statement statement = connection.createStatement();
+                 ResultSet resultSet = statement.executeQuery(sql)) {
+                assertTrue(resultSet.next());
+                assertEquals("Carrie-Anne Moss", resultSet.getString(1));
+                assertNull(resultSet.getString(2));
+
+                assertTrue(resultSet.next());
+                assertEquals("Keanu Reeves", resultSet.getString(1));
+                assertEquals("Speed", resultSet.getString(2));
+
+                assertTrue(resultSet.next());
+                assertEquals("Lana Wachowski", resultSet.getString(1));
+                assertEquals("The Matrix", resultSet.getString(2));
+
                 assertFalse(resultSet.next());
             }
         }

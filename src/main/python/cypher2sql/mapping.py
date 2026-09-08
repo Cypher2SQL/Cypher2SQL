@@ -23,17 +23,31 @@ class Mapping:
             raise NotImplementedError(
                 "WITH clauses are parsed but not rendered yet; pipeline semantics are a future enhancement."
             )
+        for pattern in query.patterns[1:]:
+            if pattern.is_optional and pattern.local_where_expression is not None:
+                raise NotImplementedError("WHERE on OPTIONAL MATCH is not supported yet.")
 
+        bound_by_variable: dict[str, BoundNode] = {}
+        next_alias_index = [0]
         bound_patterns: list[BoundPattern] = []
-        for pattern_index, pattern in enumerate(query.patterns):
-            nodes = self._resolve_node_labels(pattern)
+        for pattern in query.patterns:
+            substituted_nodes = self._substitute_bound_labels(pattern.nodes, bound_by_variable)
+            nodes = self._resolve_node_labels(Pattern(nodes=substituted_nodes, edges=pattern.edges))
             if not nodes:
                 raise ValueError("Cypher pattern contains no nodes.")
 
-            bound_nodes = [
-                BoundNode(node, self.schema.node_for_label(node.label), self._alias_at(pattern_index, node_index))
-                for node_index, node in enumerate(nodes)
-            ]
+            bound_nodes: list[BoundNode] = []
+            for node in nodes:
+                existing = bound_by_variable.get(node.variable) if node.variable else None
+                if existing is not None:
+                    bound_node = existing
+                else:
+                    bound_node = BoundNode(node, self.schema.node_for_label(node.label), f"t{next_alias_index[0]}")
+                    next_alias_index[0] += 1
+                    if node.variable:
+                        bound_by_variable[node.variable] = bound_node
+                bound_nodes.append(bound_node)
+
             traversals = [
                 BoundTraversal(
                     edge,
@@ -43,9 +57,26 @@ class Mapping:
                 )
                 for idx, edge in enumerate(pattern.edges)
             ]
-            bound_patterns.append(BoundPattern(bound_nodes, traversals))
+            bound_patterns.append(BoundPattern(bound_nodes, traversals, pattern.is_optional))
 
-        return ReadQuery(bound_patterns, query.where_expression, query.projection_items)
+        return ReadQuery(
+            bound_patterns,
+            query.where_expression,
+            query.projection_items,
+            query.order_items,
+            query.skip,
+            query.limit,
+        )
+
+    def _substitute_bound_labels(self, nodes: list[Node], bound_by_variable: dict[str, BoundNode]) -> list[Node]:
+        substituted: list[Node] = []
+        for node in nodes:
+            existing = bound_by_variable.get(node.variable) if node.variable else None
+            if not node.label and existing is not None:
+                substituted.append(Node(variable=node.variable, label=existing.label))
+            else:
+                substituted.append(node)
+        return substituted
 
     def _translate_variable_length_traversal(self, query: Query) -> ReadQuery:
         # Placeholder only: recursive traversal translation is intentionally not implemented yet.
@@ -118,6 +149,3 @@ class Mapping:
                 return self.schema.edge_for_type(type)
             except ValueError:
                 raise ValueError(f"Edge mapping labels do not match nodes: {type}") from directed_missing
-
-    def _alias_at(self, pattern_index: int, node_index: int) -> str:
-        return f"t{node_index}"

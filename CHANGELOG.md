@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented in this file.
 
+## Unreleased
+
+### Added
+- `ORDER BY` translation for `RETURN`, including multiple sort keys and explicit `ASC`/`DESC` (Java and Python).
+- `LIMIT` and `SKIP` translation for `RETURN`, restricted to integer literals; `SKIP` without `LIMIT` renders as `LIMIT -1 OFFSET n` for SQLite/Postgres/MySQL compatibility (Java and Python).
+- `OPTIONAL MATCH` translation to SQL `LEFT JOIN`. The optional pattern must share a variable already bound by a preceding `MATCH` clause; a `WHERE` predicate directly on an `OPTIONAL MATCH` clause is an explicit unsupported error for now, to avoid silently collapsing the outer join back into an inner join.
+
+### Fixed
+- Integer literals in Cypher expressions (Java) were always parsed as `Double` due to Java ternary-operator numeric promotion in the literal parser, silently losing integer-ness even though rendering happened to mask it. Numeric literal parsing now returns `Long` for integers as intended.
+- Node-alias allocation (`t0`, `t1`, ...) is now a single counter shared across all patterns in a query instead of restarting per pattern, fixing a latent alias-collision bug that would have affected any future multi-pattern query.
+
+### Changed
+- SQL rendering (`WHERE`/`RETURN`/`ORDER BY` expression resolution) moved from `BoundPattern` to `ReadQuery` in both languages, since it now needs to resolve variables across every pattern in a query, not just one.
+
 ## v0.1.0 - Phase 1 Complete (February 13, 2026)
 
 ### Added
