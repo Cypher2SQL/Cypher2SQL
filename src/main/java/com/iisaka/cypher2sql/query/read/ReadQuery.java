@@ -1,8 +1,17 @@
 package com.iisaka.cypher2sql.query.read;
 
-import com.iisaka.cypher2sql.query.cypher.Expression;
+import com.iisaka.cypher2sql.query.cypher.expression.BinaryExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.CaseExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.ConstantExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.Expression;
+import com.iisaka.cypher2sql.query.cypher.expression.FunctionExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.KnownFunction;
 import com.iisaka.cypher2sql.query.cypher.OrderItem;
 import com.iisaka.cypher2sql.query.cypher.ProjectionItem;
+import com.iisaka.cypher2sql.query.cypher.expression.PropertyExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.UnaryExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.VariableExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.WildcardExpression;
 import com.iisaka.cypher2sql.query.sql.JoinClause;
 import com.iisaka.cypher2sql.query.sql.SelectQuery;
 
@@ -13,34 +22,6 @@ import java.util.List;
 import java.util.Map;
 
 public final class ReadQuery {
-    private static final Map<String, String> SUPPORTED_FUNCTIONS = Map.ofEntries(
-            Map.entry("count", "COUNT"),
-            Map.entry("sum", "SUM"),
-            Map.entry("avg", "AVG"),
-            Map.entry("min", "MIN"),
-            Map.entry("max", "MAX"),
-            Map.entry("coalesce", "COALESCE"),
-            Map.entry("abs", "ABS"),
-            Map.entry("ceil", "CEIL"),
-            Map.entry("floor", "FLOOR"),
-            Map.entry("round", "ROUND"),
-            Map.entry("sqrt", "SQRT"),
-            Map.entry("log", "LOG"),
-            Map.entry("log10", "LOG10"),
-            Map.entry("exp", "EXP"),
-            Map.entry("sin", "SIN"),
-            Map.entry("cos", "COS"),
-            Map.entry("tan", "TAN"),
-            Map.entry("trim", "TRIM"),
-            Map.entry("ltrim", "LTRIM"),
-            Map.entry("rtrim", "RTRIM"),
-            Map.entry("substring", "SUBSTRING"),
-            Map.entry("replace", "REPLACE"),
-            Map.entry("left", "LEFT"),
-            Map.entry("right", "RIGHT"),
-            Map.entry("toupper", "UPPER"),
-            Map.entry("tolower", "LOWER"));
-
     public record FinalStage(
             Expression whereExpression,
             List<ProjectionItem> projectionItems,
@@ -198,7 +179,7 @@ public final class ReadQuery {
         boolean sawNodePassthrough = false;
 
         for (final ProjectionItem item : projectionItems) {
-            if (item.expression() instanceof Expression.VariableExpression variable
+            if (item.expression() instanceof VariableExpression variable
                     && innerAliasesByVariable.containsKey(variable.name())) {
                 if (sawNodePassthrough) {
                     throw new UnsupportedOperationException(
@@ -209,7 +190,7 @@ public final class ReadQuery {
                 final BoundNode carried = new BoundNode(original.node(), original.mapping(), "with0");
                 aliasesByVariable.put(item.alias() != null ? item.alias() : variable.name(), "with0");
                 nodesByAlias.put("with0", carried);
-            } else if (item.expression() instanceof Expression.VariableExpression variable
+            } else if (item.expression() instanceof VariableExpression variable
                     && innerEdgeProjections.containsKey(variable.name())) {
                 throw new UnsupportedOperationException(
                         "Relationship variables cannot be passed through WITH yet: " + variable.name());
@@ -301,7 +282,7 @@ public final class ReadQuery {
             return;
         }
         for (final ProjectionItem item : projectionItems) {
-            if (item.expression() instanceof Expression.VariableExpression variable) {
+            if (item.expression() instanceof VariableExpression variable) {
                 final List<String> edgeProjection = edgeProjections.get(variable.name());
                 if (edgeProjection != null && item.alias() == null) {
                     for (final String column : edgeProjection) {
@@ -338,38 +319,38 @@ public final class ReadQuery {
             final Map<String, Map<String, String>> edgePropertyProjections,
             final boolean topLevelProjection) {
         return switch (expression) {
-            case Expression.VariableExpression variable ->
+            case VariableExpression variable ->
                     renderVariable(variable.name(), aliasesByVariable, nodesByAlias, edgeProjections, topLevelProjection);
-            case Expression.PropertyExpression property ->
+            case PropertyExpression property ->
                     renderProperty(property, aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections);
-            case Expression.ConstantExpression constant -> renderConstant(constant.value());
-            case Expression.FunctionExpression function ->
+            case ConstantExpression constant -> renderConstant(constant.value());
+            case FunctionExpression function ->
                     renderFunction(function, aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections);
-            case Expression.BinaryExpression binary -> "("
+            case BinaryExpression binary -> "("
                     + renderExpression(binary.left(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections, false)
                     + " "
                     + binary.operator().sql()
                     + " "
                     + renderExpression(binary.right(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections, false)
                     + ")";
-            case Expression.UnaryExpression unary -> "("
+            case UnaryExpression unary -> "("
                     + unary.operator().sql()
                     + " "
                     + renderExpression(unary.operand(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections, false)
                     + ")";
-            case Expression.CaseExpression expressionCase ->
+            case CaseExpression expressionCase ->
                     renderCase(expressionCase, aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections);
-            case Expression.WildcardExpression ignored -> "*";
+            case WildcardExpression ignored -> "*";
         };
     }
 
     private String renderProperty(
-            final Expression.PropertyExpression property,
+            final PropertyExpression property,
             final Map<String, String> aliasesByVariable,
             final Map<String, BoundNode> nodesByAlias,
             final Map<String, List<String>> edgeProjections,
             final Map<String, Map<String, String>> edgePropertyProjections) {
-        if (property.receiver() instanceof Expression.VariableExpression variable) {
+        if (property.receiver() instanceof VariableExpression variable) {
             final String alias = aliasesByVariable.get(variable.name());
             if (alias != null) {
                 return nodesByAlias.get(alias).mapping().qualifiedColumn(alias, property.property());
@@ -416,16 +397,15 @@ public final class ReadQuery {
     }
 
     private String renderFunction(
-            final Expression.FunctionExpression function,
+            final FunctionExpression function,
             final Map<String, String> aliasesByVariable,
             final Map<String, BoundNode> nodesByAlias,
             final Map<String, List<String>> edgeProjections,
             final Map<String, Map<String, String>> edgePropertyProjections) {
-        final String sqlName = SUPPORTED_FUNCTIONS.get(function.name().toLowerCase());
-        if (sqlName == null) {
-            throw new UnsupportedOperationException(
-                    "Function is parsed but not rendered yet: " + function.name());
-        }
+        final String sqlName = KnownFunction.forName(function.name())
+                .map(KnownFunction::sqlName)
+                .orElseThrow(() -> new UnsupportedOperationException(
+                        "Function is parsed but not rendered yet: " + function.name()));
         final List<String> arguments = new ArrayList<>();
         for (final Expression argument : function.arguments()) {
             arguments.add(renderExpression(argument, aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections, false));
@@ -434,7 +414,7 @@ public final class ReadQuery {
     }
 
     private String renderCase(
-            final Expression.CaseExpression expressionCase,
+            final CaseExpression expressionCase,
             final Map<String, String> aliasesByVariable,
             final Map<String, BoundNode> nodesByAlias,
             final Map<String, List<String>> edgeProjections,
@@ -444,7 +424,7 @@ public final class ReadQuery {
             sql.append(" ").append(renderExpression(
                     expressionCase.subject(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections, false));
         }
-        for (final Expression.CaseExpression.WhenThen whenThen : expressionCase.whenThens()) {
+        for (final CaseExpression.WhenThen whenThen : expressionCase.whenThens()) {
             sql.append(" WHEN ")
                     .append(renderExpression(
                             whenThen.whenExpression(), aliasesByVariable, nodesByAlias, edgeProjections, edgePropertyProjections, false))

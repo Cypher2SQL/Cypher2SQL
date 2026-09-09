@@ -1,5 +1,7 @@
 package com.iisaka.cypher2sql.query.cypher;
 
+import com.iisaka.cypher2sql.query.cypher.expression.ConstantExpression;
+import com.iisaka.cypher2sql.query.cypher.expression.Expression;
 import com.iisaka.cypher2sql.query.read.BoundNode;
 import com.iisaka.cypher2sql.query.read.BoundPattern;
 import com.iisaka.cypher2sql.query.read.ReadQuery;
@@ -288,7 +290,7 @@ public final class Query {
     }
 
     private static Long requireIntegerLiteral(final Expression expression, final String clause) {
-        if (expression instanceof Expression.ConstantExpression constant && constant.value() instanceof Long value) {
+        if (expression instanceof ConstantExpression constant && constant.value() instanceof Long value) {
             return value;
         }
         throw new UnsupportedOperationException(

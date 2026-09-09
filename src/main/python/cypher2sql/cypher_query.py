@@ -157,9 +157,66 @@ class Pattern:
                 raise ValueError(f"Edge mapping labels do not match nodes: {type}") from directed_missing
 
 
+class KnownFunction(Enum):
+    COUNT = ("count", "COUNT", True)
+    SUM = ("sum", "SUM", True)
+    AVG = ("avg", "AVG", True)
+    MIN = ("min", "MIN", True)
+    MAX = ("max", "MAX", True)
+    COALESCE = ("coalesce", "COALESCE", False)
+    ABS = ("abs", "ABS", False)
+    CEIL = ("ceil", "CEIL", False)
+    FLOOR = ("floor", "FLOOR", False)
+    ROUND = ("round", "ROUND", False)
+    SQRT = ("sqrt", "SQRT", False)
+    LOG = ("log", "LOG", False)
+    LOG10 = ("log10", "LOG10", False)
+    EXP = ("exp", "EXP", False)
+    SIN = ("sin", "SIN", False)
+    COS = ("cos", "COS", False)
+    TAN = ("tan", "TAN", False)
+    TRIM = ("trim", "TRIM", False)
+    LTRIM = ("ltrim", "LTRIM", False)
+    RTRIM = ("rtrim", "RTRIM", False)
+    SUBSTRING = ("substring", "SUBSTRING", False)
+    REPLACE = ("replace", "REPLACE", False)
+    LEFT = ("left", "LEFT", False)
+    RIGHT = ("right", "RIGHT", False)
+    TOUPPER = ("toupper", "UPPER", False)
+    TOLOWER = ("tolower", "LOWER", False)
+
+    def __init__(self, cypher_name: str, sql_name: str, aggregate: bool) -> None:
+        self.cypher_name = cypher_name
+        self.sql_name = sql_name
+        self.aggregate = aggregate
+
+    @classmethod
+    def for_name(cls, cypher_name: str) -> "KnownFunction | None":
+        return _KNOWN_FUNCTIONS_BY_CYPHER_NAME.get(cypher_name.lower())
+
+
+_KNOWN_FUNCTIONS_BY_CYPHER_NAME = {function.cypher_name: function for function in KnownFunction}
+
+
 @dataclass(frozen=True)
 class Expression:
-    pass
+    def is_aggregate(self) -> bool:
+        if isinstance(self, FunctionExpression):
+            known = KnownFunction.for_name(self.name)
+            return (known is not None and known.aggregate) or any(arg.is_aggregate() for arg in self.arguments)
+        if isinstance(self, PropertyExpression):
+            return self.receiver.is_aggregate()
+        if isinstance(self, BinaryExpression):
+            return self.left.is_aggregate() or self.right.is_aggregate()
+        if isinstance(self, UnaryExpression):
+            return self.operand.is_aggregate()
+        if isinstance(self, CaseExpression):
+            return (
+                (self.subject is not None and self.subject.is_aggregate())
+                or any(when.is_aggregate() or then.is_aggregate() for when, then in self.when_thens)
+                or (self.else_expression is not None and self.else_expression.is_aggregate())
+            )
+        return False
 
 
 @dataclass(frozen=True)
@@ -253,9 +310,6 @@ class MatchClause:
         ]
 
 
-_AGGREGATE_FUNCTIONS = {"count", "sum", "avg", "min", "max"}
-
-
 @dataclass(frozen=True)
 class WithClause:
     items: list[ProjectionItem]
@@ -270,28 +324,9 @@ class WithClause:
         object.__setattr__(self, "items", _normalize_projection_items(self.items))
 
     def has_mixed_aggregation(self) -> bool:
-        any_aggregate = any(self._is_aggregate(item.expression) for item in self.items)
-        any_non_aggregate = any(not self._is_aggregate(item.expression) for item in self.items)
+        any_aggregate = any(item.expression.is_aggregate() for item in self.items)
+        any_non_aggregate = any(not item.expression.is_aggregate() for item in self.items)
         return any_aggregate and any_non_aggregate
-
-    def _is_aggregate(self, expression: Expression) -> bool:
-        if isinstance(expression, FunctionExpression):
-            return expression.name.lower() in _AGGREGATE_FUNCTIONS or any(
-                self._is_aggregate(arg) for arg in expression.arguments
-            )
-        if isinstance(expression, PropertyExpression):
-            return self._is_aggregate(expression.receiver)
-        if isinstance(expression, BinaryExpression):
-            return self._is_aggregate(expression.left) or self._is_aggregate(expression.right)
-        if isinstance(expression, UnaryExpression):
-            return self._is_aggregate(expression.operand)
-        if isinstance(expression, CaseExpression):
-            return (
-                (expression.subject is not None and self._is_aggregate(expression.subject))
-                or any(self._is_aggregate(when) or self._is_aggregate(then) for when, then in expression.when_thens)
-                or (expression.else_expression is not None and self._is_aggregate(expression.else_expression))
-            )
-        return False
 
 
 @dataclass(frozen=True)

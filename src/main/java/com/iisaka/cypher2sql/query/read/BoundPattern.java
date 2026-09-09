@@ -1,6 +1,6 @@
 package com.iisaka.cypher2sql.query.read;
 
-import com.iisaka.cypher2sql.query.cypher.Expression;
+import com.iisaka.cypher2sql.query.cypher.expression.Expression;
 
 import java.util.ArrayList;
 import java.util.Collections;

@@ -10,6 +10,7 @@ from .cypher_query import (
     Edge,
     Expression,
     FunctionExpression,
+    KnownFunction,
     Node,
     OrderItem,
     ProjectionItem,
@@ -20,36 +21,6 @@ from .cypher_query import (
 )
 from .schema import EdgeMapping, NodeMapping, RelationshipKind
 from .sql_query import JoinClause, JoinType, SelectQuery
-
-
-_SUPPORTED_FUNCTIONS = {
-    "count": "COUNT",
-    "sum": "SUM",
-    "avg": "AVG",
-    "min": "MIN",
-    "max": "MAX",
-    "coalesce": "COALESCE",
-    "abs": "ABS",
-    "ceil": "CEIL",
-    "floor": "FLOOR",
-    "round": "ROUND",
-    "sqrt": "SQRT",
-    "log": "LOG",
-    "log10": "LOG10",
-    "exp": "EXP",
-    "sin": "SIN",
-    "cos": "COS",
-    "tan": "TAN",
-    "trim": "TRIM",
-    "ltrim": "LTRIM",
-    "rtrim": "RTRIM",
-    "substring": "SUBSTRING",
-    "replace": "REPLACE",
-    "left": "LEFT",
-    "right": "RIGHT",
-    "toupper": "UPPER",
-    "tolower": "LOWER",
-}
 
 
 @dataclass(frozen=True)
@@ -475,9 +446,10 @@ class ReadQuery:
         edge_projections: dict[str, list[str]],
         edge_property_projections: dict[str, dict[str, str]],
     ) -> str:
-        sql_name = _SUPPORTED_FUNCTIONS.get(function.name.lower())
-        if sql_name is None:
+        known = KnownFunction.for_name(function.name)
+        if known is None:
             raise NotImplementedError(f"Function is parsed but not rendered yet: {function.name}")
+        sql_name = known.sql_name
         arguments = [
             self._render_expression(
                 argument, aliases_by_variable, nodes_by_alias, edge_projections, edge_property_projections, False

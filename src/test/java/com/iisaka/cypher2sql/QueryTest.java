@@ -1,8 +1,10 @@
 package com.iisaka.cypher2sql;
 
+import com.iisaka.cypher2sql.query.cypher.expression.BinaryExpression;
 import com.iisaka.cypher2sql.query.cypher.Edge;
-import com.iisaka.cypher2sql.query.cypher.Expression;
+import com.iisaka.cypher2sql.query.cypher.expression.Expression;
 import com.iisaka.cypher2sql.query.cypher.Pattern;
+import com.iisaka.cypher2sql.query.cypher.expression.PropertyExpression;
 import com.iisaka.cypher2sql.query.cypher.Query;
 import com.iisaka.cypher2sql.query.cypher.Syntax;
 import com.iisaka.cypher2sql.query.read.ReadQuery;
@@ -460,7 +462,7 @@ class QueryTest {
     void parsesWhereExpression() {
         final Query query = Query.of("MATCH (p:Person) WHERE p.id > 1 AND p.id < 10 RETURN p");
 
-        assertTrue(query.matchClauses().get(0).whereExpression() instanceof Expression.BinaryExpression);
+        assertTrue(query.matchClauses().get(0).whereExpression() instanceof BinaryExpression);
     }
 
     @Test
@@ -470,8 +472,8 @@ class QueryTest {
         assertTrue(query.hasWithClause());
         assertEquals(1, query.withClause().orElseThrow().items().size());
         assertEquals("pid", query.withClause().orElseThrow().items().get(0).alias());
-        assertTrue(query.withClause().orElseThrow().items().get(0).expression() instanceof Expression.PropertyExpression);
-        assertTrue(query.withClause().orElseThrow().whereExpression() instanceof Expression.BinaryExpression);
+        assertTrue(query.withClause().orElseThrow().items().get(0).expression() instanceof PropertyExpression);
+        assertTrue(query.withClause().orElseThrow().whereExpression() instanceof BinaryExpression);
     }
 
     @Test

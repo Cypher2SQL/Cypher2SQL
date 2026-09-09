@@ -1,5 +1,6 @@
 package com.iisaka.cypher2sql.query.cypher;
 
+import com.iisaka.cypher2sql.query.cypher.expression.Expression;
 import com.iisaka.cypher2sql.query.read.BoundNode;
 import com.iisaka.cypher2sql.query.read.BoundPattern;
 import com.iisaka.cypher2sql.query.read.BoundTraversal;
