@@ -41,7 +41,7 @@ public final class Edge {
         final String trimmed = inside.startsWith(":") ? inside.substring(1) : inside;
 
         final int colon = trimmed.indexOf(':');
-        final String variable = colon >= 0 ? emptyToNull(trimmed.substring(0, colon).trim()) : null;
+        final String variable = colon >= 0 ? PatternText.emptyToNull(trimmed.substring(0, colon).trim()) : null;
         final String type = colon >= 0
                 ? firstType(trimmed.substring(colon + 1))
                 : (trimmed.contains("*") ? null : firstType(trimmed));
@@ -58,24 +58,9 @@ public final class Edge {
     }
 
     private static String firstType(final String typeSegment) {
-        final int separator = indexOfAny(typeSegment, '|', '&', ':', '*', '{', ' ', '\t', '\n', '\r');
+        final int separator = PatternText.indexOfAny(typeSegment, '|', '&', ':', '*', '{', ' ', '\t', '\n', '\r');
         final String type = (separator >= 0 ? typeSegment.substring(0, separator) : typeSegment).trim();
         return type.isEmpty() ? null : type;
-    }
-
-    private static int indexOfAny(final String value, final char... needles) {
-        int best = -1;
-        for (final char needle : needles) {
-            final int idx = value.indexOf(needle);
-            if (idx >= 0 && (best < 0 || idx < best)) {
-                best = idx;
-            }
-        }
-        return best;
-    }
-
-    private static String emptyToNull(final String value) {
-        return value == null || value.isBlank() ? null : value;
     }
 
     @Override

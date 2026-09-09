@@ -4,7 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 
-public final class UpdateQuery implements Query<Grammar> {
+public final class UpdateQuery implements WriteQuery {
     private final String table;
     private final Map<String, String> assignments = new LinkedHashMap<>();
     private final java.util.List<String> whereClauses = new java.util.ArrayList<>();
@@ -40,7 +40,6 @@ public final class UpdateQuery implements Query<Grammar> {
     @Override
     public String render(final Grammar grammar) {
         // Placeholder only: write queries are intentionally disabled while the project is read-only.
-        throw new UnsupportedOperationException(
-                "Write queries are disabled in read-only mode. UpdateQuery is reserved for future enhancement.");
+        throw new UnsupportedOperationException(writeDisabledMessage());
     }
 }

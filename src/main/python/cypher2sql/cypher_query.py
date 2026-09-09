@@ -937,14 +937,3 @@ class _ExpressionParser:
             raise ValueError(f"Unsupported RETURN expression: {raw[i:]}")
         tokens.append(_Token(_TokenKind.EOF, "", ""))
         return tokens
-
-
-def _is_identifier(value: str) -> bool:
-    if not value:
-        return False
-    if not (value[0].isalpha() or value[0] == "_"):
-        return False
-    for c in value[1:]:
-        if not (c.isalnum() or c == "_"):
-            return False
-    return True

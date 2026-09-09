@@ -4,7 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-public final class DeleteQuery implements Query<Grammar> {
+public final class DeleteQuery implements WriteQuery {
     private final String table;
     private final List<String> whereClauses = new ArrayList<>();
 
@@ -28,7 +28,6 @@ public final class DeleteQuery implements Query<Grammar> {
     @Override
     public String render(final Grammar grammar) {
         // Placeholder only: write queries are intentionally disabled while the project is read-only.
-        throw new UnsupportedOperationException(
-                "Write queries are disabled in read-only mode. DeleteQuery is reserved for future enhancement.");
+        throw new UnsupportedOperationException(writeDisabledMessage());
     }
 }

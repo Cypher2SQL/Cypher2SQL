@@ -45,30 +45,15 @@ public final class Node {
         }
 
         final int colon = inside.indexOf(':');
-        final String variable = emptyToNull((colon >= 0 ? inside.substring(0, colon) : inside).trim());
+        final String variable = PatternText.emptyToNull((colon >= 0 ? inside.substring(0, colon) : inside).trim());
         final String label = colon >= 0 ? firstLabel(inside.substring(colon + 1)) : null;
         return new Node(variable, label);
     }
 
     private static String firstLabel(final String labelSegment) {
-        final int separator = indexOfAny(labelSegment, '&', ':', '{', ' ', '\t', '\n', '\r');
+        final int separator = PatternText.indexOfAny(labelSegment, '&', ':', '{', ' ', '\t', '\n', '\r');
         final String label = (separator >= 0 ? labelSegment.substring(0, separator) : labelSegment).trim();
         return label.isEmpty() ? null : label;
-    }
-
-    private static int indexOfAny(final String value, final char... needles) {
-        int best = -1;
-        for (final char needle : needles) {
-            final int idx = value.indexOf(needle);
-            if (idx >= 0 && (best < 0 || idx < best)) {
-                best = idx;
-            }
-        }
-        return best;
-    }
-
-    private static String emptyToNull(final String value) {
-        return value == null || value.isBlank() ? null : value;
     }
 
     @Override

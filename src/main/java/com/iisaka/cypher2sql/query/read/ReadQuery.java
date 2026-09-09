@@ -219,7 +219,7 @@ public final class ReadQuery {
         return outer;
     }
 
-    private static void registerNodes(
+    private void registerNodes(
             final BoundPattern pattern,
             final Map<String, String> aliasesByVariable,
             final Map<String, BoundNode> nodesByAlias) {
@@ -231,7 +231,7 @@ public final class ReadQuery {
         }
     }
 
-    private static void applyTraversals(
+    private void applyTraversals(
             final BoundPattern pattern,
             final SelectQuery select,
             final JoinClause.JoinType joinType,

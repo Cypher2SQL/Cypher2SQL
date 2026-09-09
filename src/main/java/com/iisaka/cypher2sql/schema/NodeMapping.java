@@ -169,18 +169,18 @@ public final class NodeMapping {
                 + qualifiedColumnName(otherAlias, requirePropertyName(otherPrimaryKey));
     }
 
-    private static String requireNonBlank(final String value, final String field) {
+    private String requireNonBlank(final String value, final String field) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException("Node mapping missing required field: " + field);
         }
         return value;
     }
 
-    private static String blankToNull(final String value) {
+    private String blankToNull(final String value) {
         return value == null || value.isBlank() ? null : value;
     }
 
-    private static List<List<String>> copyNested(final List<List<String>> nested) {
+    private List<List<String>> copyNested(final List<List<String>> nested) {
         final List<List<String>> copied = new ArrayList<>();
         for (final List<String> item : nested) {
             copied.add(List.copyOf(item));

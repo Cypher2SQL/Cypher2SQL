@@ -64,15 +64,21 @@ class BoundTraversal:
     ) -> list[str]:
         join_alias = f"j{next_join_alias_counter[0]}"
         next_join_alias_counter[0] += 1
-        join_on_left = _join_on_columns(self.left.alias, self.left.mapping.primary_keys, join_alias, self.mapping.from_join_keys)
+        join_on_left = self.left.mapping.join_on_columns(
+            self.left.alias, self.left.mapping.primary_keys, join_alias, self.mapping.from_join_keys
+        )
         select.add_join(JoinClause(join_type, self.mapping.join_table, join_alias, join_on_left))
 
-        join_on_right = _join_on_columns(join_alias, self.mapping.to_join_keys, self.right.alias, self.right.mapping.primary_keys)
+        join_on_right = self.right.mapping.join_on_columns(
+            join_alias, self.mapping.to_join_keys, self.right.alias, self.right.mapping.primary_keys
+        )
         select.add_join(JoinClause(join_type, self.right.mapping.qualified_table, self.right.alias, join_on_right))
         return [f"{join_alias}.*"]
 
     def _apply_self_referential(self, select: SelectQuery, join_type: JoinType) -> list[str]:
-        join_on = _join_on_columns(self.left.alias, self.mapping.from_keys, self.right.alias, self.mapping.to_keys)
+        join_on = self.left.mapping.join_on_columns(
+            self.left.alias, self.mapping.from_keys, self.right.alias, self.mapping.to_keys
+        )
         select.add_join(JoinClause(join_type, self.left.mapping.qualified_table, self.right.alias, join_on))
         return [
             *[f"{self.left.alias}.{column}" for column in self.mapping.from_keys],
@@ -83,13 +89,11 @@ class BoundTraversal:
         left_is_parent = self.left.label == self.mapping.from_label and self.right.label == self.mapping.to_label
         right_is_parent = self.right.label == self.mapping.from_label and self.left.label == self.mapping.to_label
         if left_is_parent:
-            join_on = (
-                _join_on_columns(
-                    self.right.alias,
-                    self.mapping.child_foreign_keys,
-                    self.left.alias,
-                    self.mapping.parent_primary_keys,
-                )
+            join_on = self.right.mapping.join_on_columns(
+                self.right.alias,
+                self.mapping.child_foreign_keys,
+                self.left.alias,
+                self.mapping.parent_primary_keys,
             )
             select.add_join(JoinClause(join_type, self.right.mapping.qualified_table, self.right.alias, join_on))
             return [
@@ -97,13 +101,11 @@ class BoundTraversal:
                 *[f"{self.left.alias}.{column}" for column in self.mapping.parent_primary_keys],
             ]
         if right_is_parent:
-            join_on = (
-                _join_on_columns(
-                    self.left.alias,
-                    self.mapping.child_foreign_keys,
-                    self.right.alias,
-                    self.mapping.parent_primary_keys,
-                )
+            join_on = self.left.mapping.join_on_columns(
+                self.left.alias,
+                self.mapping.child_foreign_keys,
+                self.right.alias,
+                self.mapping.parent_primary_keys,
             )
             select.add_join(JoinClause(join_type, self.right.mapping.qualified_table, self.right.alias, join_on))
             return [
@@ -262,8 +264,8 @@ class ReadQuery:
             outer.set_offset(final_stage.skip)
         return outer
 
-    @staticmethod
     def _register_nodes(
+        self,
         pattern: BoundPattern,
         aliases_by_variable: dict[str, str],
         nodes_by_alias: dict[str, BoundNode],
@@ -273,8 +275,8 @@ class ReadQuery:
             if node.variable:
                 aliases_by_variable.setdefault(node.variable, node.alias)
 
-    @staticmethod
     def _apply_traversals(
+        self,
         pattern: BoundPattern,
         select: SelectQuery,
         join_type: JoinType,
@@ -498,12 +500,3 @@ class ReadQuery:
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)
-
-
-def _join_on_columns(left_alias: str, left_columns: list[str], right_alias: str, right_columns: list[str]) -> str:
-    if len(left_columns) != len(right_columns):
-        raise ValueError(f"Join key arity mismatch: {len(left_columns)} != {len(right_columns)}")
-    return " AND ".join(
-        f"{left_alias}.{left_column} = {right_alias}.{right_column}"
-        for left_column, right_column in zip(left_columns, right_columns, strict=True)
-    )

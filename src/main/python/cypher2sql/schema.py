@@ -60,6 +60,16 @@ class NodeMapping:
             raise ValueError(f"Composite primary key is not scalar for label: {self.label}")
         return f"{alias}.{self.primary_keys[0]}"
 
+    def join_on_columns(
+        self, alias: str, columns: list[str], other_alias: str, other_columns: list[str]
+    ) -> str:
+        if len(columns) != len(other_columns):
+            raise ValueError(f"Join key arity mismatch: {len(columns)} != {len(other_columns)}")
+        return " AND ".join(
+            f"{alias}.{column} = {other_alias}.{other_column}"
+            for column, other_column in zip(columns, other_columns, strict=True)
+        )
+
 
 class RelationshipKind(Enum):
     JOIN_TABLE = "JOIN_TABLE"

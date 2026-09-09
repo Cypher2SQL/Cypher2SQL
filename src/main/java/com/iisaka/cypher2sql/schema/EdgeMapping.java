@@ -275,7 +275,7 @@ public final class EdgeMapping {
                 rightColumns.stream().map(column -> rightAlias + "." + column)).toList();
     }
 
-    private static String scalar(final List<String> values, final String name) {
+    private String scalar(final List<String> values, final String name) {
         if (values.size() != 1) {
             throw new IllegalStateException("Composite " + name + " is not scalar.");
         }
