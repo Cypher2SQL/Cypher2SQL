@@ -18,8 +18,14 @@ jobs:
           java-version: "21"
           cache: gradle
 
-      - name: Run Java tests
-        run: ./gradlew test --no-daemon
+      - name: Run Java tests with coverage
+        run: ./gradlew test integrationTest jacocoTestReport --no-daemon
+
+      - name: Upload Java coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-report
+          path: build/reports/jacoco/test
 
   python-tests:
     runs-on: ubuntu-latest
@@ -37,5 +43,15 @@ jobs:
       - name: Install Python test dependencies
         run: python -m pip install -r requirements-dev.txt
 
-      - name: Run Python tests
-        run: PYTHONPATH=src/main/python python -m unittest discover -s src/test/python/tests -v
+      - name: Run Python tests with coverage
+        run: |
+          PYTHONPATH=src/main/python python -m coverage run -m unittest discover -s src/test/python/tests -v
+          PYTHONPATH=src/main/python python -m coverage run -a -m unittest discover -s src/test/python/integration -v
+          python -m coverage report
+          python -m coverage xml
+
+      - name: Upload Python coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-coverage-report
+          path: coverage.xml

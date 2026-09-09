@@ -8,3 +8,6 @@ __pycache__/
 .DS_Store
 *.iml
 *.pyc
+.coverage
+htmlcov/
+coverage.xml

@@ -1,5 +1,6 @@
 plugins {
     id("java")
+    id("jacoco")
 }
 
 val integrationTest by sourceSets.creating {
@@ -51,4 +52,13 @@ val integrationTestTask = tasks.register<Test>("integrationTest") {
 
 tasks.check {
     dependsOn(integrationTestTask)
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test, integrationTestTask)
+    executionData(tasks.test.get(), integrationTestTask.get())
+    reports {
+        xml.required.set(true)
+        html.required.set(true)
+    }
 }

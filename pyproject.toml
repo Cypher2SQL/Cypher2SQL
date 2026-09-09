@@ -15,3 +15,11 @@ testpaths = ["src/test/python/tests"]
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src/main/python"
+
+[tool.coverage.run]
+source = ["src/main/python/cypher2sql"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false

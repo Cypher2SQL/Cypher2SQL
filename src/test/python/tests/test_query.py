@@ -351,6 +351,348 @@ class IntegrationTest(unittest.TestCase):
 
         self.assertEqual("SELECT ABS(t0.id) FROM \"people\" t0", sql)
 
+    def test_parse_and_render_subtraction_return_expression(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id - m.id")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT (t0.id - t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+            sql,
+        )
+
+    def test_parse_and_render_multiplication_return_expression(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id * m.id")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT (t0.id * t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+            sql,
+        )
+
+    def test_parse_and_render_division_return_expression(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id / m.id")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT (t0.id / t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+            sql,
+        )
+
+    def test_parse_and_render_modulo_return_expression(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+          - label: Movie
+            table: movies
+            primaryKey: id
+        edges:
+          - type: ACTED_IN
+            kind: JOIN_TABLE
+            fromLabel: Person
+            toLabel: Movie
+            joinTable: people_movies
+            fromJoinKey: person_id
+            toJoinKey: movie_id
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id % m.id")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual(
+            "SELECT (t0.id % t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+            "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+            sql,
+        )
+
+    def test_parse_and_render_unary_negate_return_expression(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN -p.id")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT (- t0.id) FROM \"people\" t0", sql)
+
+    def test_parse_and_render_not_equals_comparison(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE p.id <> 1 RETURN p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE (t0.id <> 1)", sql)
+
+    def test_parse_and_render_less_than_or_equal_comparison(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE p.id <= 1 RETURN p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE (t0.id <= 1)", sql)
+
+    def test_parse_and_render_greater_than_or_equal_comparison(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE p.id >= 1 RETURN p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE (t0.id >= 1)", sql)
+
+    def test_parse_and_render_or_logical_expression(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE p.id > 1 OR p.id < 10 RETURN p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE ((t0.id > 1) OR (t0.id < 10))", sql)
+
+    def test_parse_and_render_not_logical_expression(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE NOT p.id > 1 RETURN p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE (NOT (t0.id > 1))", sql)
+
+    def test_parse_and_render_sum_aggregate_projection(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN sum(p.id)")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT SUM(t0.id) FROM \"people\" t0", sql)
+
+    def test_parse_and_render_avg_aggregate_projection(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN avg(p.id)")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT AVG(t0.id) FROM \"people\" t0", sql)
+
+    def test_parse_and_render_min_aggregate_projection(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN min(p.id)")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT MIN(t0.id) FROM \"people\" t0", sql)
+
+    def test_parse_and_render_max_aggregate_projection(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN max(p.id)")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT MAX(t0.id) FROM \"people\" t0", sql)
+
+    def test_parse_and_render_string_literal_constant(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE p.name = 'Alice' RETURN p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE (t0.name = 'Alice')", sql)
+
+    def test_parse_and_render_boolean_literal_constants(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+
+        true_query = Query.parse("MATCH (p:Person) RETURN true")
+        false_query = Query.parse("MATCH (p:Person) RETURN false")
+
+        self.assertEqual(
+            "SELECT TRUE FROM \"people\" t0", Mapping(schema).to_sql(true_query).render(StandardGrammar())
+        )
+        self.assertEqual(
+            "SELECT FALSE FROM \"people\" t0", Mapping(schema).to_sql(false_query).render(StandardGrammar())
+        )
+
+    def test_parse_and_render_null_literal_constant(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN null")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT NULL FROM \"people\" t0", sql)
+
+    def test_parse_and_render_non_integral_float_literal(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN 1.5")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT 1.5 FROM \"people\" t0", sql)
+
+    def test_parse_and_render_integral_float_literal_without_trailing_zero(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN 2.0")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT 2 FROM \"people\" t0", sql)
+
+    def test_parse_and_render_simple_case_with_subject(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) RETURN CASE p.id WHEN 1 THEN 'one' ELSE 'other' END AS label")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT CASE t0.id WHEN 1 THEN 'one' ELSE 'other' END AS label FROM \"people\" t0", sql)
+
     def test_parse_unsupported_function_but_fails_at_sql_rendering(self) -> None:
         raw = """
         nodes:
