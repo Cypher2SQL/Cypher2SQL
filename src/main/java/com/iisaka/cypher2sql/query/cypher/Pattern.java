@@ -18,7 +18,7 @@ public record Pattern(List<Node> nodes, List<Edge> edges) {
             final int[] nextAliasIndex,
             final boolean optional,
             final Expression whereExpression) {
-        final List<Node> resolvedNodes = resolveNodeLabels(schema, substituteBoundLabels(nodes, boundByVariable), edges);
+        final List<Node> resolvedNodes = resolveNodeLabels(schema, substituteBoundLabels(boundByVariable));
         if (resolvedNodes.isEmpty()) {
             throw new IllegalArgumentException("Cypher pattern contains no nodes.");
         }
@@ -48,7 +48,7 @@ public record Pattern(List<Node> nodes, List<Edge> edges) {
         return new BoundPattern(boundNodes, traversals, optional, whereExpression);
     }
 
-    private static List<Node> substituteBoundLabels(final List<Node> nodes, final Map<String, BoundNode> boundByVariable) {
+    private List<Node> substituteBoundLabels(final Map<String, BoundNode> boundByVariable) {
         final List<Node> substituted = new ArrayList<>(nodes.size());
         for (final Node node : nodes) {
             final boolean needsLabel = node.label() == null || node.label().isBlank();
@@ -60,17 +60,14 @@ public record Pattern(List<Node> nodes, List<Edge> edges) {
         return substituted;
     }
 
-    private static List<Node> resolveNodeLabels(
-            final SchemaDefinition schema,
-            final List<Node> nodes,
-            final List<Edge> edges) {
+    private List<Node> resolveNodeLabels(final SchemaDefinition schema, final List<Node> substitutedNodes) {
         final List<Node> resolved = new ArrayList<>();
         final List<EdgeMapping> edgeMappings = new ArrayList<>();
         for (int i = 0; i < edges.size(); i++) {
-            edgeMappings.add(resolveEdgeMappingForInference(schema, edges.get(i), nodes.get(i), nodes.get(i + 1)));
+            edgeMappings.add(resolveEdgeMappingForInference(schema, edges.get(i), substitutedNodes.get(i), substitutedNodes.get(i + 1)));
         }
-        for (int i = 0; i < nodes.size(); i++) {
-            final Node node = nodes.get(i);
+        for (int i = 0; i < substitutedNodes.size(); i++) {
+            final Node node = substitutedNodes.get(i);
             if (node.label() != null && !node.label().isBlank()) {
                 resolved.add(node);
                 continue;
@@ -97,7 +94,7 @@ public record Pattern(List<Node> nodes, List<Edge> edges) {
         return resolved;
     }
 
-    private static EdgeMapping resolveEdgeMappingForInference(
+    private EdgeMapping resolveEdgeMappingForInference(
             final SchemaDefinition schema,
             final Edge edge,
             final Node left,
@@ -114,7 +111,7 @@ public record Pattern(List<Node> nodes, List<Edge> edges) {
         };
     }
 
-    private static String mergeLabel(final String current, final String candidate, final int nodeIndex) {
+    private String mergeLabel(final String current, final String candidate, final int nodeIndex) {
         if (candidate == null || candidate.isBlank()) {
             return current;
         }
@@ -127,7 +124,7 @@ public record Pattern(List<Node> nodes, List<Edge> edges) {
         return current;
     }
 
-    private static EdgeMapping resolveRelation(
+    private EdgeMapping resolveRelation(
             final SchemaDefinition schema,
             final Edge edge,
             final Node left,
@@ -139,7 +136,7 @@ public record Pattern(List<Node> nodes, List<Edge> edges) {
         };
     }
 
-    private static EdgeMapping edgeForDirectedLabelsOrFallback(
+    private EdgeMapping edgeForDirectedLabelsOrFallback(
             final SchemaDefinition schema,
             final String type,
             final String fromLabel,

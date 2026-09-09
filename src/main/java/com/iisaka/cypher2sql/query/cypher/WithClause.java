@@ -29,10 +29,10 @@ public record WithClause(
         return anyAggregate && anyNonAggregate;
     }
 
-    private static boolean isAggregate(final Expression expression) {
+    private boolean isAggregate(final Expression expression) {
         return switch (expression) {
             case Expression.FunctionExpression function -> AGGREGATE_FUNCTIONS.contains(function.name().toLowerCase())
-                    || function.arguments().stream().anyMatch(WithClause::isAggregate);
+                    || function.arguments().stream().anyMatch(this::isAggregate);
             case Expression.PropertyExpression property -> isAggregate(property.receiver());
             case Expression.BinaryExpression binary -> isAggregate(binary.left()) || isAggregate(binary.right());
             case Expression.UnaryExpression unary -> isAggregate(unary.operand());

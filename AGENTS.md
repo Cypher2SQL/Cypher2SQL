@@ -12,6 +12,7 @@ This project keeps Java and Python implementations aligned. Treat this file as t
   - Schema model: graph-to-relational mapping metadata.
 - Do not put unrelated responsibilities into a class just because it is nearby.
 - Prefer moving behavior onto the domain object that owns the concept. For example, a pattern-related operation should live with a pattern/read-query concept, not in a detached do-er class unless a separate service object is clearly justified.
+- Do not implement that behavior as `private static` helper methods (Java) or module-level `_`-prefixed helper functions (Python) once it lives on the owning class. Use private instance methods instead, even for a helper that does not itself touch the instance's fields — a class full of static/free-function helpers is the same detached-do-er smell as a separate helper class, just inlined. Static factory methods (`of`, `from...`) and genuine constants (`private static final` fields) are not affected by this rule.
 
 ## Naming
 

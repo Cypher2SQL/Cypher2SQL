@@ -56,8 +56,8 @@ class Pattern:
     ) -> Any:
         from .read_query import BoundNode, BoundPattern, BoundTraversal  # local: avoids a cypher_query <-> read_query import cycle
 
-        substituted_nodes = _substitute_bound_labels(self.nodes, bound_by_variable)
-        nodes = _resolve_node_labels(schema, substituted_nodes, self.edges)
+        substituted_nodes = self._substitute_bound_labels(bound_by_variable)
+        nodes = self._resolve_node_labels(schema, substituted_nodes)
         if not nodes:
             raise ValueError("Cypher pattern contains no nodes.")
 
@@ -76,7 +76,7 @@ class Pattern:
         traversals = [
             BoundTraversal(
                 edge,
-                _resolve_relation(schema, edge, nodes[idx], nodes[idx + 1]),
+                self._resolve_relation(schema, edge, nodes[idx], nodes[idx + 1]),
                 bound_nodes[idx],
                 bound_nodes[idx + 1],
             )
@@ -84,83 +84,77 @@ class Pattern:
         ]
         return BoundPattern(bound_nodes, traversals, is_optional, where_expression)
 
+    def _substitute_bound_labels(self, bound_by_variable: dict[str, Any]) -> list[Node]:
+        substituted: list[Node] = []
+        for node in self.nodes:
+            existing = bound_by_variable.get(node.variable) if node.variable else None
+            if not node.label and existing is not None:
+                substituted.append(Node(variable=node.variable, label=existing.label))
+            else:
+                substituted.append(node)
+        return substituted
 
-def _substitute_bound_labels(nodes: list[Node], bound_by_variable: dict[str, Any]) -> list[Node]:
-    substituted: list[Node] = []
-    for node in nodes:
-        existing = bound_by_variable.get(node.variable) if node.variable else None
-        if not node.label and existing is not None:
-            substituted.append(Node(variable=node.variable, label=existing.label))
-        else:
-            substituted.append(node)
-    return substituted
+    def _resolve_node_labels(self, schema: SchemaDefinition, substituted_nodes: list[Node]) -> list[Node]:
+        resolved: list[Node] = []
+        edge_mappings = [
+            self._resolve_edge_mapping_for_inference(schema, edge, substituted_nodes[idx], substituted_nodes[idx + 1])
+            for idx, edge in enumerate(self.edges)
+        ]
+        for idx, node in enumerate(substituted_nodes):
+            if node.label:
+                resolved.append(node)
+                continue
+            inferred = None
+            if idx > 0:
+                prev_edge = self.edges[idx - 1]
+                prev_mapping = edge_mappings[idx - 1]
+                prev_candidate = prev_mapping.from_label if prev_edge.direction is Direction.RIGHT_TO_LEFT else prev_mapping.to_label
+                inferred = self._merge_label(inferred, prev_candidate, idx)
+            if idx < len(edge_mappings):
+                next_edge = self.edges[idx]
+                next_mapping = edge_mappings[idx]
+                next_candidate = next_mapping.to_label if next_edge.direction is Direction.RIGHT_TO_LEFT else next_mapping.from_label
+                inferred = self._merge_label(inferred, next_candidate, idx)
+            resolved.append(Node(variable=node.variable, label=inferred))
+        return resolved
 
+    def _resolve_edge_mapping_for_inference(self, schema: SchemaDefinition, edge: Edge, left: Node, right: Node) -> EdgeMapping:
+        has_left = bool(left.label)
+        has_right = bool(right.label)
+        if not has_left or not has_right:
+            return schema.edge_for_type(edge.type)
+        if edge.direction is Direction.LEFT_TO_RIGHT:
+            return self._edge_for_directed_labels_or_fallback(schema, edge.type, left.label, right.label)
+        if edge.direction is Direction.RIGHT_TO_LEFT:
+            return self._edge_for_directed_labels_or_fallback(schema, edge.type, right.label, left.label)
+        return schema.edge_for_type_undirected(edge.type, left.label, right.label)
 
-def _resolve_node_labels(schema: SchemaDefinition, nodes: list[Node], edges: list[Edge]) -> list[Node]:
-    resolved: list[Node] = []
-    edge_mappings = [
-        _resolve_edge_mapping_for_inference(schema, edge, nodes[idx], nodes[idx + 1])
-        for idx, edge in enumerate(edges)
-    ]
-    for idx, node in enumerate(nodes):
-        if node.label:
-            resolved.append(node)
-            continue
-        inferred = None
-        if idx > 0:
-            prev_edge = edges[idx - 1]
-            prev_mapping = edge_mappings[idx - 1]
-            prev_candidate = prev_mapping.from_label if prev_edge.direction is Direction.RIGHT_TO_LEFT else prev_mapping.to_label
-            inferred = _merge_label(inferred, prev_candidate, idx)
-        if idx < len(edge_mappings):
-            next_edge = edges[idx]
-            next_mapping = edge_mappings[idx]
-            next_candidate = next_mapping.to_label if next_edge.direction is Direction.RIGHT_TO_LEFT else next_mapping.from_label
-            inferred = _merge_label(inferred, next_candidate, idx)
-        resolved.append(Node(variable=node.variable, label=inferred))
-    return resolved
-
-
-def _resolve_edge_mapping_for_inference(schema: SchemaDefinition, edge: Edge, left: Node, right: Node) -> EdgeMapping:
-    has_left = bool(left.label)
-    has_right = bool(right.label)
-    if not has_left or not has_right:
-        return schema.edge_for_type(edge.type)
-    if edge.direction is Direction.LEFT_TO_RIGHT:
-        return _edge_for_directed_labels_or_fallback(schema, edge.type, left.label, right.label)
-    if edge.direction is Direction.RIGHT_TO_LEFT:
-        return _edge_for_directed_labels_or_fallback(schema, edge.type, right.label, left.label)
-    return schema.edge_for_type_undirected(edge.type, left.label, right.label)
-
-
-def _merge_label(current: str | None, candidate: str | None, node_index: int) -> str | None:
-    if not candidate:
+    def _merge_label(self, current: str | None, candidate: str | None, node_index: int) -> str | None:
+        if not candidate:
+            return current
+        if current is None:
+            return candidate
+        if current != candidate:
+            raise ValueError(f"Unable to infer unique label for anonymous node at index {node_index}")
         return current
-    if current is None:
-        return candidate
-    if current != candidate:
-        raise ValueError(f"Unable to infer unique label for anonymous node at index {node_index}")
-    return current
 
+    def _resolve_relation(self, schema: SchemaDefinition, edge: Edge, left: Node, right: Node) -> EdgeMapping:
+        if edge.direction is Direction.LEFT_TO_RIGHT:
+            return self._edge_for_directed_labels_or_fallback(schema, edge.type, left.label, right.label)
+        if edge.direction is Direction.RIGHT_TO_LEFT:
+            return self._edge_for_directed_labels_or_fallback(schema, edge.type, right.label, left.label)
+        return schema.edge_for_type_undirected(edge.type, left.label, right.label)
 
-def _resolve_relation(schema: SchemaDefinition, edge: Edge, left: Node, right: Node) -> EdgeMapping:
-    if edge.direction is Direction.LEFT_TO_RIGHT:
-        return _edge_for_directed_labels_or_fallback(schema, edge.type, left.label, right.label)
-    if edge.direction is Direction.RIGHT_TO_LEFT:
-        return _edge_for_directed_labels_or_fallback(schema, edge.type, right.label, left.label)
-    return schema.edge_for_type_undirected(edge.type, left.label, right.label)
-
-
-def _edge_for_directed_labels_or_fallback(
-    schema: SchemaDefinition, type: str, from_label: str | None, to_label: str | None
-) -> EdgeMapping:
-    try:
-        return schema.edge_for_type_with_labels(type, from_label, to_label)
-    except ValueError as directed_missing:
+    def _edge_for_directed_labels_or_fallback(
+        self, schema: SchemaDefinition, type: str, from_label: str | None, to_label: str | None
+    ) -> EdgeMapping:
         try:
-            return schema.edge_for_type(type)
-        except ValueError:
-            raise ValueError(f"Edge mapping labels do not match nodes: {type}") from directed_missing
+            return schema.edge_for_type_with_labels(type, from_label, to_label)
+        except ValueError as directed_missing:
+            try:
+                return schema.edge_for_type(type)
+            except ValueError:
+                raise ValueError(f"Edge mapping labels do not match nodes: {type}") from directed_missing
 
 
 @dataclass(frozen=True)
@@ -262,24 +256,6 @@ class MatchClause:
 _AGGREGATE_FUNCTIONS = {"count", "sum", "avg", "min", "max"}
 
 
-def _is_aggregate(expression: Expression) -> bool:
-    if isinstance(expression, FunctionExpression):
-        return expression.name.lower() in _AGGREGATE_FUNCTIONS or any(_is_aggregate(arg) for arg in expression.arguments)
-    if isinstance(expression, PropertyExpression):
-        return _is_aggregate(expression.receiver)
-    if isinstance(expression, BinaryExpression):
-        return _is_aggregate(expression.left) or _is_aggregate(expression.right)
-    if isinstance(expression, UnaryExpression):
-        return _is_aggregate(expression.operand)
-    if isinstance(expression, CaseExpression):
-        return (
-            (expression.subject is not None and _is_aggregate(expression.subject))
-            or any(_is_aggregate(when) or _is_aggregate(then) for when, then in expression.when_thens)
-            or (expression.else_expression is not None and _is_aggregate(expression.else_expression))
-        )
-    return False
-
-
 @dataclass(frozen=True)
 class WithClause:
     items: list[ProjectionItem]
@@ -294,9 +270,28 @@ class WithClause:
         object.__setattr__(self, "items", _normalize_projection_items(self.items))
 
     def has_mixed_aggregation(self) -> bool:
-        any_aggregate = any(_is_aggregate(item.expression) for item in self.items)
-        any_non_aggregate = any(not _is_aggregate(item.expression) for item in self.items)
+        any_aggregate = any(self._is_aggregate(item.expression) for item in self.items)
+        any_non_aggregate = any(not self._is_aggregate(item.expression) for item in self.items)
         return any_aggregate and any_non_aggregate
+
+    def _is_aggregate(self, expression: Expression) -> bool:
+        if isinstance(expression, FunctionExpression):
+            return expression.name.lower() in _AGGREGATE_FUNCTIONS or any(
+                self._is_aggregate(arg) for arg in expression.arguments
+            )
+        if isinstance(expression, PropertyExpression):
+            return self._is_aggregate(expression.receiver)
+        if isinstance(expression, BinaryExpression):
+            return self._is_aggregate(expression.left) or self._is_aggregate(expression.right)
+        if isinstance(expression, UnaryExpression):
+            return self._is_aggregate(expression.operand)
+        if isinstance(expression, CaseExpression):
+            return (
+                (expression.subject is not None and self._is_aggregate(expression.subject))
+                or any(self._is_aggregate(when) or self._is_aggregate(then) for when, then in expression.when_thens)
+                or (expression.else_expression is not None and self._is_aggregate(expression.else_expression))
+            )
+        return False
 
 
 @dataclass(frozen=True)
