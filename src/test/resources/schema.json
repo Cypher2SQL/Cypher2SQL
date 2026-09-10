@@ -1,0 +1,17 @@
+{
+  "nodes": [
+    {"label": "Person", "table": "people", "primaryKey": "id"},
+    {"label": "Movie", "table": "movies", "primaryKey": "id"}
+  ],
+  "edges": [
+    {
+      "type": "ACTED_IN",
+      "kind": "JOIN_TABLE",
+      "fromLabel": "Person",
+      "toLabel": "Movie",
+      "joinTable": "people_movies",
+      "fromJoinKey": "person_id",
+      "toJoinKey": "movie_id"
+    }
+  ]
+}

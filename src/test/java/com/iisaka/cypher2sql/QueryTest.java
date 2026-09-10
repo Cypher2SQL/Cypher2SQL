@@ -337,12 +337,270 @@ class QueryTest {
     }
 
     @Test
+    void parsingSimpleCaseWithSubjectThrowsUnsupported() {
+        // Cypher's grammar routes a subject-CASE ("CASE <expr> WHEN ...") through
+        // extendedCaseExpression, which this codebase does not support yet — only the
+        // searched form ("CASE WHEN <predicate> THEN ...") is implemented.
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> Query.of("MATCH (p:Person) RETURN CASE p.id WHEN 1 THEN 'one' ELSE 'other' END"));
+        assertTrue(ex.getMessage().startsWith("Unsupported expression:"));
+    }
+
+    @Test
+    void caseExpressionContainingAggregateForcesMixedAggregationError() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of(
+                "MATCH (p:Person)-[:ACTED_IN]->(m:Movie) WITH p, CASE WHEN count(m) > 1 THEN 1 ELSE 0 END AS bucket RETURN p, bucket");
+
+        final Exception exception = assertThrows(UnsupportedOperationException.class, () -> query.asSql(schema));
+        assertEquals(
+                "Aggregation grouping in WITH is not supported yet; all WITH items must be aggregate expressions, or none.",
+                exception.getMessage());
+    }
+
+    @Test
     void rendersFunctionReturnExpressionWithoutAlias() {
         final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
         final Query query = Query.of("MATCH (p:Person) RETURN abs(p.id)");
         final String sql = query.asSql(schema).render(new StandardGrammar());
 
         assertEquals("SELECT ABS(t0.id) FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersSubtractionReturnExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id - m.id");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT (t0.id - t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+                sql);
+    }
+
+    @Test
+    void rendersMultiplicationReturnExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id * m.id");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT (t0.id * t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+                sql);
+    }
+
+    @Test
+    void rendersDivisionReturnExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id / m.id");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT (t0.id / t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+                sql);
+    }
+
+    @Test
+    void rendersModuloReturnExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p.id % m.id");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT (t0.id % t1.id) FROM \"people\" t0 INNER JOIN \"people_movies\" j2 ON t0.id = j2.person_id "
+                        + "INNER JOIN \"movies\" t1 ON j2.movie_id = t1.id",
+                sql);
+    }
+
+    @Test
+    void rendersUnaryNegateReturnExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN -p.id");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT (- t0.id) FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersNotEqualsComparison() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.id <> 1 RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE (t0.id <> 1)", sql);
+    }
+
+    @Test
+    void rendersLessThanOrEqualComparison() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.id <= 1 RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE (t0.id <= 1)", sql);
+    }
+
+    @Test
+    void rendersGreaterThanOrEqualComparison() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.id >= 1 RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE (t0.id >= 1)", sql);
+    }
+
+    @Test
+    void rendersOrLogicalExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.id > 1 OR p.id < 10 RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE ((t0.id > 1) OR (t0.id < 10))", sql);
+    }
+
+    @Test
+    void rendersNotLogicalExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE NOT p.id > 1 RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE (NOT (t0.id > 1))", sql);
+    }
+
+    @Test
+    void rendersSumAggregateProjection() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN sum(p.id)");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT SUM(t0.id) FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersAvgAggregateProjection() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN avg(p.id)");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT AVG(t0.id) FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersMinAggregateProjection() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN min(p.id)");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT MIN(t0.id) FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersMaxAggregateProjection() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN max(p.id)");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT MAX(t0.id) FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersStringLiteralConstant() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.name = 'Alice' RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE (t0.name = 'Alice')", sql);
+    }
+
+    @Test
+    void rendersStringLiteralConstantContainingASingleQuote() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.name = \"O'Brien\" RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE (t0.name = 'O''Brien')", sql);
+    }
+
+    @Test
+    void rendersBooleanLiteralConstants() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query trueQuery = Query.of("MATCH (p:Person) RETURN true");
+        final Query falseQuery = Query.of("MATCH (p:Person) RETURN false");
+
+        assertEquals("SELECT TRUE FROM \"people\" t0", trueQuery.asSql(schema).render(new StandardGrammar()));
+        assertEquals("SELECT FALSE FROM \"people\" t0", falseQuery.asSql(schema).render(new StandardGrammar()));
+    }
+
+    @Test
+    void rendersNullLiteralConstant() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN null");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT NULL FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersHexadecimalIntegerLiteral() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN 0x1F");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT 31 FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersOctalIntegerLiteral() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN 0o17");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT 15 FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersNonIntegralDoubleLiteral() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN 1.5");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT 1.5 FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersIntegralDoubleLiteralWithoutTrailingZero() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) RETURN 2.0");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT 2 FROM \"people\" t0", sql);
+    }
+
+    @Test
+    void rendersThreeWayAndExpression() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.id > 1 AND p.id < 10 AND p.id <> 5 RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT t0.* FROM \"people\" t0 WHERE (((t0.id > 1) AND (t0.id < 10)) AND (t0.id <> 5))",
+                sql);
+    }
+
+    @Test
+    void parsingXorExpressionThrowsUnsupported() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> Query.of("MATCH (p:Person) RETURN true XOR false"));
+        assertTrue(ex.getMessage().startsWith("Unsupported expression:"));
+    }
+
+    @Test
+    void parsingPowerExpressionThrowsUnsupported() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> Query.of("MATCH (p:Person) RETURN 2 ^ 3"));
+        assertTrue(ex.getMessage().startsWith("Unsupported expression:"));
     }
 
     @Test

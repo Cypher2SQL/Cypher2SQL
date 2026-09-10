@@ -4,12 +4,20 @@ import com.iisaka.cypher2sql.schema.EdgeMapping;
 import com.iisaka.cypher2sql.schema.NodeMapping;
 import com.iisaka.cypher2sql.schema.SchemaDefinition;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SchemaDefinitionTest {
+    @TempDir
+    Path tempDir;
     @Test
     void loadsSchemaFromYamlResource() {
         final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
@@ -149,5 +157,244 @@ class SchemaDefinitionTest {
         assertEquals("character_name", edge.columnForProperty("role"));
         assertEquals(EdgeMapping.Cardinality.MANY_TO_MANY, edge.cardinality());
         assertEquals(true, edge.unique());
+    }
+
+    @Test
+    void loadsSchemaFromJsonResource() {
+        final SchemaDefinition schema = SchemaDefinition.fromJsonResource("schema.json");
+
+        assertEquals("people", schema.nodeForLabel("Person").table());
+        assertEquals(EdgeMapping.RelationshipKind.JOIN_TABLE, schema.edgeForType("ACTED_IN").relationshipKind());
+    }
+
+    @Test
+    void jsonResourceNotFoundThrows() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromJsonResource("does-not-exist.json"));
+        assertEquals("Resource not found: does-not-exist.json", ex.getMessage());
+    }
+
+    @Test
+    void yamlResourceNotFoundThrows() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromYamlResource("does-not-exist.yaml"));
+        assertEquals("Resource not found: does-not-exist.yaml", ex.getMessage());
+    }
+
+    @Test
+    void loadsSchemaFromYamlPath() throws IOException {
+        final Path path = tempDir.resolve("schema.yaml");
+        Files.writeString(path, """
+                nodes:
+                  - label: Person
+                    table: people
+                    primaryKey: id
+                edges: []
+                """);
+
+        final SchemaDefinition schema = SchemaDefinition.fromYamlPath(path);
+
+        assertEquals("people", schema.nodeForLabel("Person").table());
+    }
+
+    @Test
+    void loadsSchemaFromJsonPath() throws IOException {
+        final Path path = tempDir.resolve("schema.json");
+        Files.writeString(path, """
+                {"nodes": [{"label": "Person", "table": "people", "primaryKey": "id"}], "edges": []}
+                """);
+
+        final SchemaDefinition schema = SchemaDefinition.fromJsonPath(path);
+
+        assertEquals("people", schema.nodeForLabel("Person").table());
+    }
+
+    @Test
+    void loadsManyToOneEdgeFromYaml() {
+        final String raw = """
+                nodes:
+                  - label: Movie
+                    table: movies
+                    primaryKey: id
+                  - label: Person
+                    table: people
+                    primaryKey: id
+                edges:
+                  - type: AUTHORED
+                    kind: MANY_TO_ONE
+                    fromLabel: Movie
+                    toLabel: Person
+                    fromForeignKey: author_id
+                    toPrimaryKey: id
+                """;
+
+        final SchemaDefinition schema = SchemaDefinition.fromYamlString(raw);
+        final EdgeMapping edge = schema.edgeForType("AUTHORED");
+
+        assertEquals(EdgeMapping.RelationshipKind.MANY_TO_ONE, edge.relationshipKind());
+        assertEquals("author_id", edge.childForeignKey());
+        assertEquals("id", edge.parentPrimaryKey());
+    }
+
+    @Test
+    void loadsSelfReferentialEdgeFromYaml() {
+        final String raw = """
+                nodes:
+                  - label: Person
+                    table: people
+                    primaryKey: id
+                edges:
+                  - type: MANAGES
+                    kind: SELF_REFERENTIAL
+                    label: Person
+                    fromKey: manager_id
+                    toKey: id
+                """;
+
+        final SchemaDefinition schema = SchemaDefinition.fromYamlString(raw);
+        final EdgeMapping edge = schema.edgeForType("MANAGES");
+
+        assertEquals(EdgeMapping.RelationshipKind.SELF_REFERENTIAL, edge.relationshipKind());
+        assertEquals("manager_id", edge.fromKey());
+    }
+
+    @Test
+    void nodeForLabelThrowsWhenMissing() {
+        final SchemaDefinition schema = new SchemaDefinition();
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> schema.nodeForLabel("Ghost"));
+        assertEquals("No node mapping for label: Ghost", ex.getMessage());
+    }
+
+    @Test
+    void edgeForTypeThrowsWhenMissing() {
+        final SchemaDefinition schema = new SchemaDefinition();
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> schema.edgeForType("GHOST"));
+        assertEquals("No edge mapping for type: GHOST", ex.getMessage());
+    }
+
+    @Test
+    void edgeForTypeThrowsWhenAmbiguous() {
+        final SchemaDefinition schema = new SchemaDefinition()
+                .addEdge(EdgeMapping.forOneToMany("AUTHORED", "Person", "Movie", "id", "author_id"))
+                .addEdge(EdgeMapping.forOneToMany("AUTHORED", "Person", "Book", "id", "author_id"));
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> schema.edgeForType("AUTHORED"));
+        assertTrue(ex.getMessage().startsWith("Ambiguous edge mapping for type: AUTHORED"));
+    }
+
+    @Test
+    void edgeForTypeAndLabelsThrowsWhenMissing() {
+        final SchemaDefinition schema = new SchemaDefinition();
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> schema.edgeForType("AUTHORED", "Person", "Movie"));
+        assertEquals("No edge mapping for type/labels: AUTHORED (Person->Movie)", ex.getMessage());
+    }
+
+    @Test
+    void edgeForTypeUndirectedFindsForwardAndReverseMatches() {
+        final SchemaDefinition schema = new SchemaDefinition()
+                .addEdge(EdgeMapping.forOneToMany("AUTHORED", "Person", "Movie", "id", "author_id"));
+
+        assertNotNull(schema.edgeForTypeUndirected("AUTHORED", "Person", "Movie"));
+        assertNotNull(schema.edgeForTypeUndirected("AUTHORED", "Movie", "Person"));
+    }
+
+    @Test
+    void edgeForTypeUndirectedThrowsWhenAmbiguous() {
+        final SchemaDefinition schema = new SchemaDefinition()
+                .addEdge(EdgeMapping.forOneToMany("AUTHORED", "Person", "Movie", "id", "author_id"))
+                .addEdge(EdgeMapping.forOneToMany("AUTHORED", "Movie", "Person", "id", "author_id"));
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> schema.edgeForTypeUndirected("AUTHORED", "Person", "Movie"));
+        assertEquals(
+                "Ambiguous undirected edge mapping for type/labels: AUTHORED (Person<->Movie)", ex.getMessage());
+    }
+
+    @Test
+    void edgeForTypeUndirectedThrowsWhenMissing() {
+        final SchemaDefinition schema = new SchemaDefinition();
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> schema.edgeForTypeUndirected("AUTHORED", "Person", "Movie"));
+        assertEquals(
+                "No edge mapping for undirected type/labels: AUTHORED (Person<->Movie)", ex.getMessage());
+    }
+
+    @Test
+    void schemaYamlMustBeAMapping() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromYamlString("- not a mapping"));
+        assertEquals("Schema YAML must be a mapping.", ex.getMessage());
+    }
+
+    @Test
+    void schemaJsonMustBeAMapping() {
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromJsonString("[1, 2, 3]"));
+        assertEquals("Schema JSON must be a mapping.", ex.getMessage());
+    }
+
+    @Test
+    void eachNodeEntryMustBeAMapping() {
+        final String raw = """
+                nodes:
+                  - "not a mapping"
+                edges: []
+                """;
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromYamlString(raw));
+        assertEquals("Each node entry must be a mapping.", ex.getMessage());
+    }
+
+    @Test
+    void eachEdgeEntryMustBeAMapping() {
+        final String raw = """
+                nodes: []
+                edges:
+                  - "not a mapping"
+                """;
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromYamlString(raw));
+        assertEquals("Each edge entry must be a mapping.", ex.getMessage());
+    }
+
+    @Test
+    void schemaListValuesMustBeNonBlankStrings() {
+        final String raw = """
+                nodes:
+                  - label: Person
+                    table: people
+                    primaryKeys: [id, ""]
+                edges: []
+                """;
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromYamlString(raw));
+        assertEquals("Schema list values must be non-blank strings.", ex.getMessage());
+    }
+
+    @Test
+    void schemaPropertyMappingMustBeStringOrMapping() {
+        final String raw = """
+                nodes:
+                  - label: Person
+                    table: people
+                    properties:
+                      name: [not, valid]
+                edges: []
+                """;
+
+        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> SchemaDefinition.fromYamlString(raw));
+        assertEquals("Schema property mapping must be a string or mapping.", ex.getMessage());
     }
 }
