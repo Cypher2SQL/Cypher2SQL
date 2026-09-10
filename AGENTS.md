@@ -52,6 +52,7 @@ This project keeps Java and Python implementations aligned. Treat this file as t
 
 ## Tests
 
+- Write unit tests together with the main logic in the same change, not as a follow-up. A grammar feature, operator, or function is not done until it has a passing test — do not merge implementation-only changes and defer coverage to "later." This applies per-case: adding one more operator or function to an already-tested family (e.g. a new arithmetic operator alongside `+`, a new aggregate alongside `count`) still needs its own test, since sharing a code path is not proof the new case renders correctly.
 - Tests should assert behavior at the most useful public boundary.
 - Translation tests should cover the full path from Cypher parse to SQL render when behavior depends on multiple layers.
 - Keep Java and Python test coverage aligned for cross-language behavior.

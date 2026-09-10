@@ -763,10 +763,15 @@ class _ExpressionParser:
         return expression
 
     def _parse_and(self) -> Expression:
-        expression = self._parse_comparison()
+        expression = self._parse_not()
         while self._match_keyword("AND"):
-            expression = BinaryExpression(expression, "AND", self._parse_comparison())
+            expression = BinaryExpression(expression, "AND", self._parse_not())
         return expression
+
+    def _parse_not(self) -> Expression:
+        if self._match_keyword("NOT"):
+            return UnaryExpression("NOT", self._parse_not())
+        return self._parse_comparison()
 
     def _parse_comparison(self) -> Expression:
         expression = self._parse_additive()
@@ -790,8 +795,6 @@ class _ExpressionParser:
         return expression
 
     def _parse_unary(self) -> Expression:
-        if self._match_keyword("NOT"):
-            return UnaryExpression("NOT", self._parse_unary())
         if self._match_symbol("-"):
             return UnaryExpression("-", self._parse_unary())
         if self._match_symbol("+"):
@@ -902,6 +905,23 @@ class _ExpressionParser:
                         i += 2
                         continue
                     if current == "'":
+                        i += 1
+                        break
+                    value.append(current)
+                    i += 1
+                text = "".join(value)
+                tokens.append(_Token(_TokenKind.STRING, text, "'" + text.replace("'", "''") + "'"))
+                continue
+            if c == '"':
+                value = []
+                i += 1
+                while i < len(raw):
+                    current = raw[i]
+                    if current == '"' and i + 1 < len(raw) and raw[i + 1] == '"':
+                        value.append('"')
+                        i += 2
+                        continue
+                    if current == '"':
                         i += 1
                         break
                     value.append(current)

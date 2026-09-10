@@ -78,30 +78,6 @@ public final class ReadQuery {
         return patterns.get(index);
     }
 
-    public List<ProjectionItem> projectionItems() {
-        return projectionItems;
-    }
-
-    public boolean distinct() {
-        return distinct;
-    }
-
-    public Expression whereExpression() {
-        return whereExpression;
-    }
-
-    public List<OrderItem> orderItems() {
-        return orderItems;
-    }
-
-    public Long skip() {
-        return skip;
-    }
-
-    public Long limit() {
-        return limit;
-    }
-
     public SelectQuery asSql() {
         if (patterns.isEmpty()) {
             throw new IllegalArgumentException("No patterns parsed from Cypher query.");
@@ -455,12 +431,6 @@ public final class ReadQuery {
                 return Long.toString((long) doubleValue.doubleValue());
             }
             return doubleValue.toString();
-        }
-        if (value instanceof Float floatValue) {
-            if (floatValue == (float) Math.rint(floatValue)) {
-                return Integer.toString((int) floatValue.floatValue());
-            }
-            return floatValue.toString();
         }
         return value.toString();
     }
