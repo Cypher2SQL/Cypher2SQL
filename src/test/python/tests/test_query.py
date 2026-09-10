@@ -249,6 +249,20 @@ class IntegrationTest(unittest.TestCase):
 
         self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE ((t0.id > 1) AND (t0.id < 10))", sql)
 
+    def test_parse_and_render_string_literal_constant_containing_a_single_quote(self) -> None:
+        raw = """
+        nodes:
+          - label: Person
+            table: people
+            primaryKey: id
+        edges: []
+        """
+        schema = SchemaDefinition.from_yaml_string(raw)
+        query = Query.parse("MATCH (p:Person) WHERE p.name = \"O'Brien\" RETURN p")
+        sql = Mapping(schema).to_sql(query).render(StandardGrammar())
+
+        self.assertEqual("SELECT t0.* FROM \"people\" t0 WHERE (t0.name = 'O''Brien')", sql)
+
     def test_parse_and_render_arithmetic_return_expression_with_alias(self) -> None:
         raw = """
         nodes:

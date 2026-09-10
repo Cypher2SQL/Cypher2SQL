@@ -909,6 +909,23 @@ class _ExpressionParser:
                 text = "".join(value)
                 tokens.append(_Token(_TokenKind.STRING, text, "'" + text.replace("'", "''") + "'"))
                 continue
+            if c == '"':
+                value = []
+                i += 1
+                while i < len(raw):
+                    current = raw[i]
+                    if current == '"' and i + 1 < len(raw) and raw[i + 1] == '"':
+                        value.append('"')
+                        i += 2
+                        continue
+                    if current == '"':
+                        i += 1
+                        break
+                    value.append(current)
+                    i += 1
+                text = "".join(value)
+                tokens.append(_Token(_TokenKind.STRING, text, "'" + text.replace("'", "''") + "'"))
+                continue
             if c.isdigit():
                 start = i
                 while i < len(raw) and (raw[i].isdigit() or raw[i] == "."):

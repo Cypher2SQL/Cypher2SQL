@@ -199,6 +199,15 @@ class QueryTest {
     }
 
     @Test
+    void rendersStringLiteralConstantContainingASingleQuote() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of("MATCH (p:Person) WHERE p.name = \"O'Brien\" RETURN p");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals("SELECT t0.* FROM \"people\" t0 WHERE (t0.name = 'O''Brien')", sql);
+    }
+
+    @Test
     void rendersJoinTableRowsWhenReturningEdgeVariable() {
         final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
         final Query query = Query.of("MATCH ()-[r:ACTED_IN]->() RETURN r");
