@@ -19,6 +19,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * A parsed, read-only Cypher query: an ordered list of {@link Clause}s built from the ANTLR parse tree
+ * produced by {@link Syntax}. This is the entry point for translating Cypher text to SQL — parse with
+ * {@link #of(String)}, then either inspect the clauses directly or call {@link #asSql(SchemaDefinition)}.
+ */
 public final class Query {
     private final String raw;
     private final ParseTree parseTree;
@@ -36,39 +41,52 @@ public final class Query {
         this.hasVariableLengthTraversal = hasVariableLengthTraversal;
     }
 
+    /** The original Cypher query text this was parsed from. */
     public String raw() {
         return raw;
     }
 
+    /** The raw ANTLR parse tree produced by {@link Syntax}. */
     public ParseTree parseTree() {
         return parseTree;
     }
 
+    /** All clauses in this query, in source order. */
     public List<Clause> clauses() {
         return clauses;
     }
 
+    /** All {@code MATCH}/{@code OPTIONAL MATCH} clauses in this query, in source order. */
     public List<MatchClause> matchClauses() {
         return clauses.stream().filter(MatchClause.class::isInstance).map(MatchClause.class::cast).toList();
     }
 
+    /** The query's {@code WITH} clause, if it has one. Only a single {@code WITH} clause is supported. */
     public Optional<WithClause> withClause() {
         return clauses.stream().filter(WithClause.class::isInstance).map(WithClause.class::cast).findFirst();
     }
 
+    /** Whether this query has a {@code WITH} clause. */
     public boolean hasWithClause() {
         return withClause().isPresent();
     }
 
+    /** The query's {@code RETURN} clause, or an empty clause if the query has none. */
     public ReturnClause returnClause() {
         return clauses.stream().filter(ReturnClause.class::isInstance).map(ReturnClause.class::cast).findFirst()
                 .orElseGet(() -> new ReturnClause(List.of(), false, List.of(), null, null, null));
     }
 
+    /** Whether any pattern uses a variable-length traversal (e.g. {@code -[*1..3]->}), which is not yet supported. */
     public boolean hasVariableLengthTraversal() {
         return hasVariableLengthTraversal;
     }
 
+    /**
+     * Parses a Cypher query string using the ANTLR-based {@link Syntax#cypher25()} grammar.
+     *
+     * @throws IllegalArgumentException if the text is not syntactically valid Cypher
+     */
     public static Query of(final String cypher) {
         final Syntax.ParsedCypher parsed = Syntax.cypher25().parse(cypher);
         final ParseTree parseTree = parsed.parseTree();
@@ -80,10 +98,23 @@ public final class Query {
                 hasVariableLengthTraversal(parseTree, ruleNames));
     }
 
+    /**
+     * Binds this query against the given schema and renders it as a SQL {@code SELECT}.
+     *
+     * @throws UnsupportedOperationException if the query uses a feature not yet translatable to SQL
+     * @throws IllegalArgumentException      if a pattern's labels or properties cannot be resolved against the schema
+     */
     public SelectQuery asSql(final SchemaDefinition schema) {
         return asReadQuery(schema).asSql();
     }
 
+    /**
+     * Binds this query's patterns and clauses against the schema, producing the intermediate read-query
+     * representation that {@link #asSql} renders to SQL.
+     *
+     * @throws UnsupportedOperationException if the query uses a feature not yet translatable to SQL
+     * @throws IllegalArgumentException      if a pattern's labels or properties cannot be resolved against the schema
+     */
     public ReadQuery asReadQuery(final SchemaDefinition schema) {
         if (hasVariableLengthTraversal()) {
             // Placeholder only: recursive traversal translation is intentionally not implemented yet.

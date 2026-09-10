@@ -1,3 +1,8 @@
+"""Schema model: graph-to-relational mapping metadata.
+
+Mirrors Java's ``com.iisaka.cypher2sql.schema`` package.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,6 +20,17 @@ except ImportError:  # pragma: no cover - runtime dependency
 
 @dataclass(frozen=True)
 class PropertyMapping:
+    """Maps one Cypher property name to its underlying SQL column, for a :class:`NodeMapping` or
+    :class:`EdgeMapping` whose Cypher property name differs from (or needs more metadata than) its column.
+
+    Attributes:
+        property: the Cypher property name.
+        column: the underlying SQL column name.
+        type: the column's declared type, or ``None`` if unspecified.
+        nullable: whether the column allows ``NULL``.
+        quote: whether the column identifier requires quoting.
+    """
+
     property: str
     column: str
     type: str | None = None
@@ -24,6 +40,22 @@ class PropertyMapping:
 
 @dataclass(frozen=True)
 class NodeMapping:
+    """Maps a Cypher node label to a SQL table: its qualified name, primary key column(s), per-property
+    column mappings, label inheritance, and uniqueness constraints.
+
+    Attributes:
+        label: the node's primary Cypher label.
+        table: the table's unqualified name.
+        primary_key: convenience single-column form of ``primary_keys``; set either this or ``primary_keys``.
+        labels: all Cypher labels this mapping matches; defaults to ``[label]``.
+        inherits: labels this node inherits from (schema metadata; not yet consulted by label resolution).
+        catalog: the table's catalog qualifier, or ``None``.
+        schema: the table's schema qualifier, or ``None``.
+        primary_keys: the primary key column(s); defaults to ``["id"]``.
+        properties: Cypher property name to column mapping, for properties whose column differs from the property name.
+        unique_keys: additional unique key column groups.
+    """
+
     label: str
     table: str
     primary_key: str | None = None
@@ -46,16 +78,24 @@ class NodeMapping:
 
     @property
     def qualified_table(self) -> str:
+        """The table's fully-qualified name, e.g. ``catalog.schema.table``, omitting absent qualifiers."""
         return ".".join(part for part in (self.catalog, self.schema, self.table) if part)
 
     def column_for_property(self, property_name: str) -> str:
+        """The SQL column for a Cypher property, falling back to the property name itself if unmapped."""
         mapping = self.properties.get(property_name)
         return property_name if mapping is None else mapping.column
 
     def qualified_column(self, alias: str, property_name: str) -> str:
+        """A Cypher property's underlying column, qualified by ``alias``."""
         return f"{alias}.{self.column_for_property(property_name)}"
 
     def qualified_primary_key(self, alias: str) -> str:
+        """The primary key column, qualified by ``alias``.
+
+        Raises:
+            ValueError: if the primary key is composite.
+        """
         if len(self.primary_keys) != 1:
             raise ValueError(f"Composite primary key is not scalar for label: {self.label}")
         return f"{alias}.{self.primary_keys[0]}"
@@ -63,6 +103,12 @@ class NodeMapping:
     def join_on_columns(
         self, alias: str, columns: list[str], other_alias: str, other_columns: list[str]
     ) -> str:
+        """A join-on expression (already ``AND``-joined) equating ``columns`` on ``alias`` to
+        ``other_columns`` on ``other_alias``, position by position.
+
+        Raises:
+            ValueError: if ``columns`` and ``other_columns`` differ in length.
+        """
         if len(columns) != len(other_columns):
             raise ValueError(f"Join key arity mismatch: {len(columns)} != {len(other_columns)}")
         return " AND ".join(
@@ -72,13 +118,21 @@ class NodeMapping:
 
 
 class RelationshipKind(Enum):
+    """The relational join strategy used to translate a relationship of this type to SQL."""
+
     JOIN_TABLE = "JOIN_TABLE"
+    """A many-to-many relationship via a separate join table."""
     SELF_REFERENTIAL = "SELF_REFERENTIAL"
+    """A relationship between two rows of the same table, via a foreign key column."""
     ONE_TO_MANY = "ONE_TO_MANY"
+    """A relationship from a parent table to a child table via the child's foreign key."""
     MANY_TO_ONE = "MANY_TO_ONE"
+    """A relationship from a child table to a parent table via the child's foreign key."""
 
 
 class Cardinality(Enum):
+    """The true cardinality of a relationship, as schema metadata independent of its :class:`RelationshipKind`."""
+
     ONE_TO_ONE = "ONE_TO_ONE"
     ONE_TO_MANY = "ONE_TO_MANY"
     MANY_TO_ONE = "MANY_TO_ONE"
@@ -87,6 +141,33 @@ class Cardinality(Enum):
 
 @dataclass(frozen=True)
 class EdgeMapping:
+    """Maps a Cypher relationship type to its underlying SQL join strategy: a many-to-many join table
+    (:meth:`for_join_table`), a self-referential foreign key on the same table
+    (:meth:`for_self_referential`), or a foreign key between two tables (:meth:`for_one_to_many`; a
+    ``MANY_TO_ONE`` mapping is constructed directly and is reached today only via schema deserialization).
+
+    Attributes:
+        type: the Cypher relationship type this mapping applies to.
+        from_label: the label of the node this relationship is directed from.
+        to_label: the label of the node this relationship is directed to.
+        relationship_kind: the relational join strategy used to translate this relationship to SQL.
+        cardinality: this relationship's declared cardinality, independent of ``relationship_kind``.
+        unique: whether this relationship is constrained to be unique per source node.
+        join_table: the join table's name, for a ``JOIN_TABLE`` mapping.
+        from_join_key: convenience single-column form of ``from_join_keys``.
+        to_join_key: convenience single-column form of ``to_join_keys``.
+        from_join_keys: the join table's column(s) referencing the from-side node.
+        to_join_keys: the join table's column(s) referencing the to-side node.
+        from_key: convenience single-column form of ``from_keys``.
+        to_key: convenience single-column form of ``to_keys``.
+        from_keys: the from-side column(s), for a ``SELF_REFERENTIAL`` mapping.
+        to_keys: the to-side column(s), for a ``SELF_REFERENTIAL`` mapping.
+        parent_primary_key: convenience single-column form of ``parent_primary_keys``.
+        child_foreign_key: convenience single-column form of ``child_foreign_keys``.
+        parent_primary_keys: the parent table's primary key column(s), for a ``ONE_TO_MANY``/``MANY_TO_ONE`` mapping.
+        child_foreign_keys: the child table's foreign key column(s), for a ``ONE_TO_MANY``/``MANY_TO_ONE`` mapping.
+        properties: Cypher relationship property name to column mapping.
+    """
     type: str
     from_label: str
     to_label: str
@@ -141,6 +222,7 @@ class EdgeMapping:
         from_join_key: str,
         to_join_key: str,
     ) -> "EdgeMapping":
+        """Creates a many-to-many join-table mapping with a single scalar join key on each side."""
         return cls(
             type=type,
             from_label=from_label,
@@ -160,6 +242,7 @@ class EdgeMapping:
         from_key: str,
         to_key: str,
     ) -> "EdgeMapping":
+        """Creates a self-referential mapping with a single scalar key on each side."""
         return cls(
             type=type,
             from_label=label,
@@ -179,6 +262,7 @@ class EdgeMapping:
         parent_primary_key: str,
         child_foreign_key: str,
     ) -> "EdgeMapping":
+        """Creates a one-to-many mapping with a single scalar key on each side."""
         return cls(
             type=type,
             from_label=parent_label,
@@ -191,27 +275,45 @@ class EdgeMapping:
 
 
 class SchemaDefinition:
+    """The full graph-to-relational mapping for a Cypher-to-SQL translation: every :class:`NodeMapping` and
+    :class:`EdgeMapping`, indexed for lookup by label and by relationship type (with or without directed
+    endpoint labels, to resolve ambiguity when a type is reused between different label pairs). Can be
+    built programmatically via :meth:`add_node`/:meth:`add_edge`, or loaded from YAML or JSON via the
+    ``from_yaml_*``/``from_json_*``/:meth:`from_dict` factories.
+    """
+
     def __init__(self) -> None:
         self._nodes: dict[str, NodeMapping] = {}
         self._edges_by_key: dict[str, EdgeMapping] = {}
         self._edges_by_type: dict[str, list[EdgeMapping]] = {}
 
     def add_node(self, mapping: NodeMapping) -> "SchemaDefinition":
+        """Registers a node mapping, keyed by its label."""
         self._nodes[mapping.label] = mapping
         return self
 
     def add_edge(self, mapping: EdgeMapping) -> "SchemaDefinition":
+        """Registers an edge mapping, keyed by its type and directed from/to labels."""
         key = self._edge_key(mapping.type, mapping.from_label, mapping.to_label)
         self._edges_by_key[key] = mapping
         self._edges_by_type.setdefault(mapping.type, []).append(mapping)
         return self
 
     def node_for_label(self, label: str) -> NodeMapping:
+        """Raises:
+        ValueError: if no node mapping is registered for ``label``.
+        """
         if label not in self._nodes:
             raise ValueError(f"No node mapping for label: {label}")
         return self._nodes[label]
 
     def edge_for_type(self, type: str) -> EdgeMapping:
+        """Looks up an edge mapping by type alone, for an anonymous relationship whose endpoint labels are
+        unknown.
+
+        Raises:
+            ValueError: if no mapping exists for ``type``, or more than one does.
+        """
         mappings = self._edges_by_type.get(type, [])
         if not mappings:
             raise ValueError(f"No edge mapping for type: {type}")
@@ -221,6 +323,12 @@ class SchemaDefinition:
         return mappings[0]
 
     def edge_for_type_with_labels(self, type: str, from_label: str, to_label: str) -> EdgeMapping:
+        """Looks up an edge mapping by type and directed from/to labels, resolving ambiguity when a type is
+        reused between different label pairs.
+
+        Raises:
+            ValueError: if no mapping exists for this exact type/label combination.
+        """
         key = self._edge_key(type, from_label, to_label)
         mapping = self._edges_by_key.get(key)
         if mapping is None:
@@ -228,6 +336,12 @@ class SchemaDefinition:
         return mapping
 
     def edge_for_type_undirected(self, type: str, left_label: str, right_label: str) -> EdgeMapping:
+        """Looks up an edge mapping by type and label pair, in either direction, for a Cypher pattern
+        written without an arrowhead.
+
+        Raises:
+            ValueError: if no mapping exists for either direction, or both directions match different mappings.
+        """
         forward = self._edges_by_key.get(self._edge_key(type, left_label, right_label))
         reverse = self._edges_by_key.get(self._edge_key(type, right_label, left_label))
         if forward is not None and reverse is not None and forward is not reverse:
@@ -240,14 +354,30 @@ class SchemaDefinition:
 
     @classmethod
     def from_json_string(cls, raw: str) -> "SchemaDefinition":
+        """Loads a schema from a JSON string.
+
+        Raises:
+            ValueError: if the content is malformed.
+        """
         return cls.from_dict(json.loads(raw))
 
     @classmethod
     def from_json_path(cls, path: str | Path) -> "SchemaDefinition":
+        """Loads a schema from a JSON file.
+
+        Raises:
+            ValueError: if the content is malformed.
+        """
         return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
 
     @classmethod
     def from_dict(cls, payload: dict) -> "SchemaDefinition":
+        """Builds a schema from an already-parsed YAML/JSON payload (a ``dict`` of the same shape the
+        ``nodes``/``edges`` schema documents use).
+
+        Raises:
+            ValueError: if the payload is malformed.
+        """
         if not isinstance(payload, dict):
             raise ValueError("Schema payload must be a mapping.")
         schema = cls()
@@ -277,10 +407,22 @@ class SchemaDefinition:
 
     @classmethod
     def from_yaml_string(cls, raw: str) -> "SchemaDefinition":
+        """Loads a schema from a YAML string. Uses PyYAML if installed, else a minimal built-in fallback
+        parser covering this schema format's own subset of YAML.
+
+        Raises:
+            ValueError: if the content is malformed.
+        """
         return cls.from_dict(_yaml_load(raw))
 
     @classmethod
     def from_yaml_path(cls, path: str | Path) -> "SchemaDefinition":
+        """Loads a schema from a YAML file. Uses PyYAML if installed, else a minimal built-in fallback
+        parser covering this schema format's own subset of YAML.
+
+        Raises:
+            ValueError: if the content is malformed.
+        """
         return cls.from_dict(_yaml_load(Path(path).read_text(encoding="utf-8")))
 
     @staticmethod

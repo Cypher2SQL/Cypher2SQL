@@ -1,3 +1,9 @@
+"""Read IR: bound read query parts, schema-resolved from a parsed :class:`~cypher2sql.cypher_query.Query`
+and rendered to SQL.
+
+Mirrors Java's ``com.iisaka.cypher2sql.query.read`` package.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -25,21 +31,42 @@ from .sql_query import JoinClause, JoinType, SelectQuery
 
 @dataclass(frozen=True)
 class BoundNode:
+    """A Cypher :class:`~cypher2sql.cypher_query.Node` resolved against a
+    :class:`~cypher2sql.schema.NodeMapping` and assigned a SQL table alias.
+
+    Attributes:
+        node: the unresolved Cypher node this was bound from.
+        mapping: the schema mapping this node's label resolved to.
+        alias: the SQL table alias assigned to this node, e.g. ``t0``.
+    """
+
     node: Node
     mapping: NodeMapping
     alias: str
 
     @property
     def variable(self) -> str | None:
+        """The node's Cypher variable name, or ``None`` if anonymous."""
         return self.node.variable
 
     @property
     def label(self) -> str | None:
+        """The node's resolved label."""
         return self.node.label
 
 
 @dataclass(frozen=True)
 class BoundTraversal:
+    """A Cypher :class:`~cypher2sql.cypher_query.Edge` resolved against a
+    :class:`~cypher2sql.schema.EdgeMapping` and connecting two :class:`BoundNode`\\ s.
+
+    Attributes:
+        edge: the unresolved Cypher edge this was bound from.
+        mapping: the schema mapping this edge's type resolved to.
+        left: the node this traversal starts from, as written in the Cypher pattern.
+        right: the node this traversal ends at, as written in the Cypher pattern.
+    """
+
     edge: Edge
     mapping: EdgeMapping
     left: BoundNode
@@ -51,6 +78,16 @@ class BoundTraversal:
         next_join_alias_counter: list[int],
         join_type: JoinType = JoinType.INNER,
     ) -> list[str]:
+        """Adds the SQL join(s) for this traversal to ``select``, choosing the join strategy from the
+        mapping's :class:`~cypher2sql.schema.RelationshipKind`, and returns the SQL column expression(s)
+        this relationship would project if returned by variable.
+
+        Args:
+            next_join_alias_counter: single-element counter used to allocate the next ``jN`` join alias.
+
+        Raises:
+            ValueError: if the mapping's parent/child labels do not match the bound nodes.
+        """
         if self.mapping.relationship_kind is RelationshipKind.JOIN_TABLE:
             return self._apply_join_table(select, next_join_alias_counter, join_type)
         if self.mapping.relationship_kind is RelationshipKind.SELF_REFERENTIAL:
@@ -117,6 +154,18 @@ class BoundTraversal:
 
 @dataclass(frozen=True)
 class BoundPattern:
+    """A :class:`~cypher2sql.cypher_query.Pattern` whose nodes and edges have all been bound and aliased.
+
+    Attributes:
+        nodes: the pattern's bound nodes, in traversal order.
+        traversals: the pattern's bound relationship traversals connecting consecutive nodes.
+        is_optional: whether this pattern came from an ``OPTIONAL MATCH``, rendered as an outer join.
+        local_where_expression: this pattern's own ``WHERE`` predicate (from its enclosing ``MATCH`` clause), or ``None``.
+
+    Raises:
+        ValueError: if ``nodes`` does not have exactly one more element than ``traversals``.
+    """
+
     nodes: list[BoundNode]
     traversals: list[BoundTraversal]
     is_optional: bool = False
@@ -128,6 +177,11 @@ class BoundPattern:
 
     @property
     def root(self) -> BoundNode:
+        """The first node in the pattern, from which its FROM clause or outer join originates.
+
+        Raises:
+            ValueError: if the pattern has no nodes.
+        """
         if not self.nodes:
             raise ValueError("BoundPattern has no nodes.")
         return self.nodes[0]
@@ -135,6 +189,18 @@ class BoundPattern:
 
 @dataclass(frozen=True)
 class FinalStage:
+    """The post-``WITH`` projection stage of a query, rendered as an outer ``SELECT`` over the ``WITH``
+    clause's own ``SELECT``.
+
+    Attributes:
+        where_expression: the ``RETURN``-side ``WHERE`` predicate (from after ``WITH``), or ``None``.
+        projection_items: the final ``RETURN`` clause's projected items.
+        distinct: whether the final ``RETURN`` specified ``DISTINCT``.
+        order_items: the final ``RETURN``'s own ``ORDER BY`` keys.
+        skip: the final ``RETURN``'s ``SKIP`` count, or ``None``.
+        limit: the final ``RETURN``'s ``LIMIT`` count, or ``None``.
+    """
+
     where_expression: Expression | None
     projection_items: list[ProjectionItem]
     distinct: bool
@@ -145,6 +211,16 @@ class FinalStage:
 
 @dataclass(frozen=True)
 class ReadQuery:
+    """The bound, ready-to-render form of a :class:`~cypher2sql.cypher_query.Query`: schema-resolved
+    patterns plus the read-side clauses (``WHERE``/``RETURN``/``ORDER BY``/``SKIP``/``LIMIT``), with an
+    optional :class:`FinalStage` for a query that also has a ``WITH`` clause. :meth:`as_sql` renders this
+    to a :class:`~cypher2sql.sql_query.SelectQuery`.
+
+    When ``final_stage`` is set, ``projection_items`` and the surrounding read-clause fields describe the
+    ``WITH`` clause's own ``SELECT``, and ``final_stage`` describes the outer ``SELECT`` built from the
+    final ``RETURN``.
+    """
+
     patterns: list[BoundPattern]
     where_expression: Expression | None
     projection_items: list[ProjectionItem]
@@ -156,12 +232,22 @@ class ReadQuery:
 
     @property
     def pattern_count(self) -> int:
+        """The number of top-level bound patterns (one ``MATCH``/``OPTIONAL MATCH`` clause each)."""
         return len(self.patterns)
 
     def pattern_at(self, index: int) -> BoundPattern:
+        """The bound pattern at the given index, in ``MATCH``-clause source order."""
         return self.patterns[index]
 
     def as_sql(self) -> SelectQuery:
+        """Renders this read query as a SQL ``SELECT``: an ``INNER JOIN`` chain for the first pattern, a
+        ``LEFT JOIN`` chain for each subsequent (necessarily ``OPTIONAL MATCH``) pattern, and -- if this
+        query has a :class:`FinalStage` -- an outer ``SELECT`` over the whole thing.
+
+        Raises:
+            ValueError: if there are no patterns.
+            NotImplementedError: if the query uses a feature not yet translatable to SQL.
+        """
         if not self.patterns:
             raise ValueError("No patterns parsed from Cypher query.")
         if self.patterns[0].is_optional:

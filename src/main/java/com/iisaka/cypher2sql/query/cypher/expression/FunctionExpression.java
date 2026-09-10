@@ -5,6 +5,12 @@ import org.neo4j.cypher.internal.parser.v25.Cypher25Parser;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * A function call, e.g. {@code count(p)} or {@code toUpper(p.name)}.
+ *
+ * @param name      the Cypher function name, as written (lookup against {@link KnownFunction} is case-insensitive)
+ * @param arguments the call's argument expressions
+ */
 public record FunctionExpression(String name, List<Expression> arguments) implements Expression {
     @Override
     public boolean isAggregate() {

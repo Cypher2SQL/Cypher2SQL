@@ -1,3 +1,9 @@
+"""Cypher model: parsed Cypher query parts -- query, node, edge, pattern, clause, and expression -- built
+from the real ``antlr4_cypher`` grammar that parses the overall query shape.
+
+Mirrors Java's ``com.iisaka.cypher2sql.query.cypher`` package (and its ``expression`` subpackage).
+"""
+
 from __future__ import annotations
 
 import builtins
@@ -23,19 +29,41 @@ except ImportError as exc:  # pragma: no cover - runtime dependency
 
 
 class Direction(Enum):
+    """The arrow direction of a relationship pattern as written in Cypher."""
+
     LEFT_TO_RIGHT = "LEFT_TO_RIGHT"
+    """Written as ``-[...]->``."""
     RIGHT_TO_LEFT = "RIGHT_TO_LEFT"
+    """Written as ``<-[...]-``."""
     UNDIRECTED = "UNDIRECTED"
+    """Written as ``-[...]-``, with no arrowhead."""
 
 
 @dataclass(frozen=True)
 class Node:
+    """A single node within a Cypher pattern, e.g. ``(p:Person)``. Either ``variable`` or ``label`` may be
+    ``None`` for an anonymous or unlabeled node.
+
+    Attributes:
+        variable: the node's bound variable name, or ``None`` if anonymous.
+        label: the node's label, or ``None`` if unlabeled (label may be inferred later from an adjacent edge).
+    """
+
     variable: str | None
     label: str | None
 
 
 @dataclass(frozen=True)
 class Edge:
+    """A single relationship traversal within a Cypher pattern, e.g. ``-[r:ACTED_IN]->``. ``type`` and
+    ``variable`` may be ``None`` for an untyped or anonymous relationship.
+
+    Attributes:
+        variable: the relationship's bound variable name, or ``None`` if anonymous.
+        type: the relationship type, or ``None`` if untyped.
+        direction: the arrow direction the relationship was written with in the Cypher pattern.
+    """
+
     variable: str | None
     type: str | None
     direction: Direction
@@ -43,6 +71,13 @@ class Edge:
 
 @dataclass(frozen=True)
 class Pattern:
+    """A single graph pattern from a ``MATCH`` clause, e.g. ``(p:Person)-[:ACTED_IN]->(m:Movie)``.
+
+    Attributes:
+        nodes: the pattern's nodes, in traversal order; ``len(edges) == len(nodes) - 1``.
+        edges: the relationships connecting consecutive nodes.
+    """
+
     nodes: list[Node]
     edges: list[Edge]
 
@@ -54,6 +89,21 @@ class Pattern:
         is_optional: bool,
         where_expression: "Expression | None",
     ) -> Any:
+        """Resolves this pattern's node labels and edge mappings against the schema, producing a
+        :class:`~cypher2sql.read_query.BoundPattern` ready for SQL translation. Anonymous or unlabeled
+        nodes are inferred from adjacent edges or from an already-bound variable of the same name;
+        ``bound_by_variable`` and ``next_alias_index`` are updated in place so later patterns can reuse
+        variables bound by earlier ones.
+
+        Args:
+            bound_by_variable: variable name to already-bound node, shared and extended across all patterns in a query.
+            next_alias_index: single-element counter used to allocate the next ``tN`` table alias.
+            is_optional: whether this pattern belongs to an ``OPTIONAL MATCH``.
+            where_expression: the enclosing ``MATCH`` clause's ``WHERE`` predicate, or ``None``.
+
+        Raises:
+            ValueError: if the pattern has no nodes, or a node's label cannot be resolved.
+        """
         from .read_query import BoundNode, BoundPattern, BoundTraversal  # local: avoids a cypher_query <-> read_query import cycle
 
         substituted_nodes = self._substitute_bound_labels(bound_by_variable)
@@ -158,6 +208,10 @@ class Pattern:
 
 
 class KnownFunction(Enum):
+    """The Cypher functions this project can translate to SQL, mapping each one's Cypher name to its SQL
+    equivalent and whether it is an aggregate.
+    """
+
     COUNT = ("count", "COUNT", True)
     SUM = ("sum", "SUM", True)
     AVG = ("avg", "AVG", True)
@@ -192,6 +246,7 @@ class KnownFunction(Enum):
 
     @classmethod
     def for_name(cls, cypher_name: str) -> "KnownFunction | None":
+        """Looks up a known function by its Cypher name, case-insensitively, or ``None`` if unknown."""
         return _KNOWN_FUNCTIONS_BY_CYPHER_NAME.get(cypher_name.lower())
 
 
@@ -200,7 +255,15 @@ _KNOWN_FUNCTIONS_BY_CYPHER_NAME = {function.cypher_name: function for function i
 
 @dataclass(frozen=True)
 class Expression:
+    """A parsed Cypher expression tree node, as found in ``WHERE``, ``RETURN``, ``ORDER BY``, and similar
+    clauses. The base class dispatches :meth:`is_aggregate` by ``isinstance`` over its subclasses:
+    :class:`VariableExpression`, :class:`PropertyExpression`, :class:`ConstantExpression`,
+    :class:`FunctionExpression`, :class:`BinaryExpression`, :class:`UnaryExpression`,
+    :class:`CaseExpression`, and :class:`WildcardExpression`.
+    """
+
     def is_aggregate(self) -> bool:
+        """Whether this expression is, or contains, an aggregate function call such as ``count(*)``."""
         if isinstance(self, FunctionExpression):
             known = KnownFunction.for_name(self.name)
             return (known is not None and known.aggregate) or any(arg.is_aggregate() for arg in self.arguments)
@@ -221,28 +284,54 @@ class Expression:
 
 @dataclass(frozen=True)
 class VariableExpression(Expression):
+    """A reference to a bound pattern variable, e.g. ``p``."""
+
     name: str
 
 
 @dataclass(frozen=True)
 class PropertyExpression(Expression):
+    """A property access, e.g. ``p.name``.
+
+    Attributes:
+        receiver: the expression the property is read from, typically a :class:`VariableExpression`.
+        property: the Cypher property name.
+    """
+
     receiver: Expression
     property: str
 
 
 @dataclass(frozen=True)
 class ConstantExpression(Expression):
+    """A literal constant: a number, string, boolean, or ``None`` for Cypher's ``null``."""
+
     value: Any
 
 
 @dataclass(frozen=True)
 class FunctionExpression(Expression):
+    """A function call, e.g. ``count(p)`` or ``toUpper(p.name)``.
+
+    Attributes:
+        name: the Cypher function name, as written (lookup against :class:`KnownFunction` is case-insensitive).
+        arguments: the call's argument expressions.
+    """
+
     name: str
     arguments: list[Expression]
 
 
 @dataclass(frozen=True)
 class BinaryExpression(Expression):
+    """A two-operand expression, e.g. ``p.age > 18`` or ``a AND b``.
+
+    Attributes:
+        left: the left-hand operand.
+        operator: the binary operator's SQL rendering, e.g. ``"AND"``, ``">"``.
+        right: the right-hand operand.
+    """
+
     left: Expression
     operator: str
     right: Expression
@@ -250,12 +339,28 @@ class BinaryExpression(Expression):
 
 @dataclass(frozen=True)
 class UnaryExpression(Expression):
+    """A single-operand expression, e.g. ``NOT p.active`` or ``-p.balance``.
+
+    Attributes:
+        operator: the unary operator's SQL rendering, e.g. ``"NOT"``, ``"-"``.
+        operand: the operand expression.
+    """
+
     operator: str
     operand: Expression
 
 
 @dataclass(frozen=True)
 class CaseExpression(Expression):
+    """A ``CASE`` expression, in either its subject form (``CASE p.status WHEN ...``) or generic form
+    (``CASE WHEN ...``).
+
+    Attributes:
+        subject: the subject expression for a subject-form ``CASE``, or ``None`` for the generic form.
+        when_thens: the ``(when_expression, then_expression)`` branches, in order.
+        else_expression: the ``ELSE`` expression, or ``None`` if absent.
+    """
+
     subject: Expression | None
     when_thens: list[tuple[Expression, Expression]]
     else_expression: Expression | None
@@ -263,17 +368,27 @@ class CaseExpression(Expression):
 
 @dataclass(frozen=True)
 class WildcardExpression(Expression):
-    pass
+    """The ``*`` wildcard, as it appears in ``count(*)``."""
 
 
 @dataclass(frozen=True)
 class ReturnItem:
+    """A legacy bare-variable-and-property projection item, kept for callers constructing projections
+    programmatically; :attr:`expression` builds the equivalent :class:`Expression` tree on demand.
+
+    Attributes:
+        variable: the bound variable name.
+        property: an optional property to project off of the variable.
+        alias: the ``AS`` alias, or ``None`` if unaliased.
+    """
+
     variable: str
     property: str | None = None
     alias: str | None = None
 
     @builtins.property
     def expression(self) -> Expression:
+        """The equivalent :class:`VariableExpression` (or :class:`PropertyExpression` if :attr:`property` is set)."""
         expression: Expression = VariableExpression(self.variable)
         if self.property is not None:
             expression = PropertyExpression(expression, self.property)
@@ -282,12 +397,26 @@ class ReturnItem:
 
 @dataclass(frozen=True)
 class ProjectionItem:
+    """One item projected by a ``RETURN`` or ``WITH`` clause.
+
+    Attributes:
+        expression: the projected expression.
+        alias: the ``AS`` alias, or ``None`` if unaliased.
+    """
+
     expression: Expression
     alias: str | None = None
 
 
 @dataclass(frozen=True)
 class OrderItem:
+    """One ``ORDER BY`` sort key.
+
+    Attributes:
+        expression: the expression to sort by.
+        descending: ``True`` for ``DESC``, ``False`` for the default ascending order.
+    """
+
     expression: Expression
     descending: bool
 
@@ -298,12 +427,22 @@ def _normalize_projection_items(items: list[ReturnItem | ProjectionItem]) -> lis
 
 @dataclass(frozen=True)
 class MatchClause:
+    """A parsed ``MATCH`` or ``OPTIONAL MATCH`` clause.
+
+    Attributes:
+        patterns: the graph patterns matched by this clause.
+        is_optional: ``True`` for ``OPTIONAL MATCH``, rendered as an outer join.
+        where_expression: this clause's own ``WHERE`` predicate, or ``None`` if none.
+        parse_tree_node: the originating ANTLR parse-tree node.
+    """
+
     patterns: list[Pattern]
     is_optional: bool = False
     where_expression: Expression | None = None
     parse_tree_node: Any = None
 
     def bind(self, schema: SchemaDefinition, bound_by_variable: dict[str, Any], next_alias_index: list[int]) -> list[Any]:
+        """Binds every pattern in this clause against the schema, extending ``bound_by_variable`` in place."""
         return [
             pattern.bind(schema, bound_by_variable, next_alias_index, self.is_optional, self.where_expression)
             for pattern in self.patterns
@@ -312,6 +451,19 @@ class MatchClause:
 
 @dataclass(frozen=True)
 class WithClause:
+    """A parsed ``WITH`` clause, forming an intermediate projection stage between ``MATCH`` and ``RETURN``.
+    Only a single ``WITH`` clause per query is currently supported.
+
+    Attributes:
+        items: the projected expressions.
+        distinct: whether ``DISTINCT`` was specified.
+        order_items: this clause's own ``ORDER BY`` keys.
+        skip: the ``SKIP`` count, or ``None`` if absent.
+        limit: the ``LIMIT`` count, or ``None`` if absent.
+        where_expression: this clause's own ``WHERE`` predicate, or ``None`` if none.
+        parse_tree_node: the originating ANTLR parse-tree node.
+    """
+
     items: list[ProjectionItem]
     distinct: bool = False
     order_items: list[OrderItem] = field(default_factory=list)
@@ -324,6 +476,7 @@ class WithClause:
         object.__setattr__(self, "items", _normalize_projection_items(self.items))
 
     def has_mixed_aggregation(self) -> bool:
+        """Whether :attr:`items` mixes aggregate and non-aggregate expressions, which is not supported."""
         any_aggregate = any(item.expression.is_aggregate() for item in self.items)
         any_non_aggregate = any(not item.expression.is_aggregate() for item in self.items)
         return any_aggregate and any_non_aggregate
@@ -331,6 +484,17 @@ class WithClause:
 
 @dataclass(frozen=True)
 class ReturnClause:
+    """A parsed ``RETURN`` clause.
+
+    Attributes:
+        items: the projected expressions.
+        distinct: whether ``DISTINCT`` was specified.
+        order_items: this clause's own ``ORDER BY`` keys.
+        skip: the ``SKIP`` count, or ``None`` if absent.
+        limit: the ``LIMIT`` count, or ``None`` if absent.
+        parse_tree_node: the originating ANTLR parse-tree node, or ``None`` for a synthesized empty clause.
+    """
+
     items: list[ProjectionItem]
     distinct: bool = False
     order_items: list[OrderItem] = field(default_factory=list)
@@ -343,9 +507,16 @@ class ReturnClause:
 
 
 Clause = MatchClause | WithClause | ReturnClause
+"""One clause of a parsed Cypher query, in the order it appeared in the source text."""
 
 
 class Query:
+    """A parsed, read-only Cypher query: an ordered list of :data:`Clause`\\ s built from the ANTLR parse
+    tree produced by the ``antlr4_cypher`` grammar. This is the entry point for translating Cypher text to
+    SQL -- parse with :meth:`parse`, then either inspect the clauses directly or hand the query to a
+    :class:`~cypher2sql.mapping.Mapping`.
+    """
+
     def __init__(
         self,
         raw: str,
@@ -362,26 +533,32 @@ class Query:
 
     @property
     def raw(self) -> str:
+        """The original Cypher query text this was parsed from."""
         return self._raw
 
     @property
     def clauses(self) -> list[Clause]:
+        """All clauses in this query, in source order."""
         return list(self._clauses)
 
     @property
     def parse_tree(self) -> Any:
+        """The raw ANTLR parse tree produced by :func:`_parse`."""
         return self._parse_tree
 
     @property
     def has_variable_length_traversal(self) -> bool:
+        """Whether any pattern uses a variable-length traversal (e.g. ``-[*1..3]->``), which is not yet supported."""
         return self._has_variable_length_traversal
 
     @property
     def match_clauses(self) -> list[MatchClause]:
+        """All ``MATCH``/``OPTIONAL MATCH`` clauses in this query, in source order."""
         return [clause for clause in self._clauses if isinstance(clause, MatchClause)]
 
     @property
     def with_clause(self) -> WithClause | None:
+        """The query's ``WITH`` clause, if it has one. Only a single ``WITH`` clause is supported."""
         for clause in self._clauses:
             if isinstance(clause, WithClause):
                 return clause
@@ -389,10 +566,12 @@ class Query:
 
     @property
     def has_with_clause(self) -> bool:
+        """Whether this query has a ``WITH`` clause."""
         return self.with_clause is not None
 
     @property
     def return_clause(self) -> ReturnClause:
+        """The query's ``RETURN`` clause, or an empty clause if the query has none."""
         for clause in self._clauses:
             if isinstance(clause, ReturnClause):
                 return clause
@@ -400,10 +579,12 @@ class Query:
 
     @property
     def has_multiple_with_clauses(self) -> bool:
+        """Whether this query has more than one ``WITH`` clause, which is not supported."""
         return sum(1 for clause in self._clauses if isinstance(clause, WithClause)) > 1
 
     @property
     def has_match_after_with(self) -> bool:
+        """Whether a ``MATCH``/``OPTIONAL MATCH`` clause follows a ``WITH`` clause, which is not supported."""
         saw_with = False
         for clause in self._clauses:
             if isinstance(clause, WithClause):
@@ -414,6 +595,12 @@ class Query:
 
     @classmethod
     def parse(cls, cypher: str) -> "Query":
+        """Parses a Cypher query string using the ANTLR-based ``antlr4_cypher`` grammar.
+
+        Raises:
+            ValueError: if the text is not syntactically valid Cypher.
+            RuntimeError: if the ANTLR runtime is not installed.
+        """
         parse_tree, parser = _parse(cypher)
         clauses = _extract_clauses(parser, parse_tree)
         return cls(cypher, clauses, parse_tree, _has_variable_length_traversal(parser, parse_tree))
@@ -703,6 +890,13 @@ def _has_variable_length_traversal(parser: Any, parse_tree: Any) -> bool:
 
 
 def parse_expression(raw: str) -> Expression:
+    """Parses the raw text of a Cypher expression (a ``WHERE``/``RETURN``/``ORDER BY`` operand, as taken
+    from the real ``antlr4_cypher`` grammar's parse tree via ``getText()``) into an :class:`Expression`
+    tree, using this module's own hand-written, operator-precedence-aware tokenizer and parser.
+
+    Raises:
+        ValueError: if the expression uses a construct not yet supported.
+    """
     return _ExpressionParser(raw).parse()
 
 

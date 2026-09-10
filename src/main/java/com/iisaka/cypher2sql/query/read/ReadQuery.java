@@ -21,7 +21,24 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * The bound, ready-to-render form of a {@link com.iisaka.cypher2sql.query.cypher.Query}: schema-resolved
+ * patterns plus the read-side clauses ({@code WHERE}/{@code RETURN}/{@code ORDER BY}/{@code SKIP}/
+ * {@code LIMIT}), with an optional {@link FinalStage} for a query that also has a {@code WITH} clause.
+ * {@link #asSql()} renders this to a {@link SelectQuery}.
+ */
 public final class ReadQuery {
+    /**
+     * The post-{@code WITH} projection stage of a query, rendered as an outer {@code SELECT} over the
+     * {@code WITH} clause's own {@code SELECT}.
+     *
+     * @param whereExpression  the {@code RETURN}-side {@code WHERE} predicate (from after {@code WITH}), or {@code null}
+     * @param projectionItems  the final {@code RETURN} clause's projected items
+     * @param distinct         whether the final {@code RETURN} specified {@code DISTINCT}
+     * @param orderItems       the final {@code RETURN}'s own {@code ORDER BY} keys
+     * @param skip             the final {@code RETURN}'s {@code SKIP} count, or {@code null}
+     * @param limit            the final {@code RETURN}'s {@code LIMIT} count, or {@code null}
+     */
     public record FinalStage(
             Expression whereExpression,
             List<ProjectionItem> projectionItems,
@@ -40,6 +57,7 @@ public final class ReadQuery {
     private final Long limit;
     private final FinalStage finalStage;
 
+    /** Creates a {@code ReadQuery} with no {@code WITH}-stage; equivalent to passing a {@code null} final stage. */
     public ReadQuery(
             final List<BoundPattern> patterns,
             final Expression whereExpression,
@@ -51,6 +69,11 @@ public final class ReadQuery {
         this(patterns, whereExpression, projectionItems, distinct, orderItems, skip, limit, null);
     }
 
+    /**
+     * Creates a {@code ReadQuery}. When {@code finalStage} is non-null, {@code projectionItems} and the
+     * surrounding read-clause fields describe the {@code WITH} clause's own {@code SELECT}, and
+     * {@code finalStage} describes the outer {@code SELECT} built from the final {@code RETURN}.
+     */
     public ReadQuery(
             final List<BoundPattern> patterns,
             final Expression whereExpression,
@@ -70,14 +93,24 @@ public final class ReadQuery {
         this.finalStage = finalStage;
     }
 
+    /** The number of top-level bound patterns (one {@code MATCH}/{@code OPTIONAL MATCH} clause each). */
     public int patternCount() {
         return patterns.size();
     }
 
+    /** The bound pattern at the given index, in {@code MATCH}-clause source order. */
     public BoundPattern patternAt(final int index) {
         return patterns.get(index);
     }
 
+    /**
+     * Renders this read query as a SQL {@code SELECT}: an {@code INNER JOIN} chain for the first pattern,
+     * a {@code LEFT JOIN} chain for each subsequent (necessarily {@code OPTIONAL MATCH}) pattern, and — if
+     * this query has a {@link FinalStage} — an outer {@code SELECT} over the whole thing.
+     *
+     * @throws IllegalArgumentException      if there are no patterns
+     * @throws UnsupportedOperationException if the query uses a feature not yet translatable to SQL
+     */
     public SelectQuery asSql() {
         if (patterns.isEmpty()) {
             throw new IllegalArgumentException("No patterns parsed from Cypher query.");

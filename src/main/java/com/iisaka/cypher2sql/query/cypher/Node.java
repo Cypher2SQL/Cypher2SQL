@@ -2,6 +2,10 @@ package com.iisaka.cypher2sql.query.cypher;
 
 import java.util.Objects;
 
+/**
+ * A single node within a Cypher pattern, e.g. {@code (p:Person)}.
+ * Either {@link #variable()} or {@link #label()} may be {@code null} for an anonymous or unlabeled node.
+ */
 public final class Node {
     private final String variable;
     private final String label;
@@ -11,14 +15,17 @@ public final class Node {
         this.label = label;
     }
 
+    /** The node's bound variable name, or {@code null} if anonymous. */
     public String variable() {
         return variable;
     }
 
+    /** The node's label, or {@code null} if unlabeled (label may be inferred later from an adjacent edge). */
     public String label() {
         return label;
     }
 
+    /** Whether this node was written without a variable, e.g. {@code (:Person)}. */
     public boolean isAnonymous() {
         return variable == null || variable.isBlank();
     }

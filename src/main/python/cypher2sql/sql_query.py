@@ -1,3 +1,8 @@
+"""SQL model: query builders that render themselves to text for a given :class:`Grammar`.
+
+Mirrors Java's ``com.iisaka.cypher2sql.query.sql`` package.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -6,25 +11,43 @@ from typing import Protocol, Self
 
 
 class Grammar(Protocol):
+    """A target SQL dialect's identifier-quoting and naming rules, passed to :meth:`Renderable.render`."""
+
     def name(self) -> str:  # pragma: no cover - protocol
+        """The dialect's name, e.g. ``"standard"``."""
         ...
 
     def quote_identifier(self, identifier: str) -> str:  # pragma: no cover - protocol
+        """Quotes a (possibly dotted, e.g. ``table.column``) identifier for this dialect."""
         ...
 
 
 class Renderable(Protocol):
+    """A SQL statement that can render itself for a given :class:`Grammar`."""
+
     def render(self, grammar: Grammar) -> str:  # pragma: no cover - protocol
+        """Renders this query as SQL text using the given dialect's quoting rules."""
         ...
 
 
 class JoinType(Enum):
+    """``INNER`` for a ``MATCH``, ``LEFT`` for an ``OPTIONAL MATCH``."""
+
     INNER = "INNER"
     LEFT = "LEFT"
 
 
 @dataclass(frozen=True)
 class JoinClause:
+    """One ``JOIN`` in a :class:`SelectQuery`.
+
+    Attributes:
+        join_type: whether this is an ``INNER`` or ``LEFT`` join.
+        table: the joined table's unqualified name.
+        alias: the alias assigned to the joined table.
+        on_condition: the already-rendered ``ON`` condition SQL.
+    """
+
     join_type: JoinType
     table: str
     alias: str
@@ -33,6 +56,10 @@ class JoinClause:
 
 @dataclass
 class SelectQuery(Renderable):
+    """A mutable ``SELECT`` statement builder, assembled incrementally by
+    :meth:`~cypher2sql.read_query.ReadQuery.as_sql` and then rendered to text by :meth:`render`.
+    """
+
     select_columns: list[str] = field(default_factory=list)
     distinct: bool = False
     from_table: str | None = None
@@ -46,6 +73,7 @@ class SelectQuery(Renderable):
 
     @classmethod
     def select_from(cls, table: str, alias: str) -> Self:
+        """Starts a ``SELECT ... FROM table alias`` with no columns yet."""
         select = cls()
         select.from_table = table
         select.from_alias = alias
@@ -53,30 +81,41 @@ class SelectQuery(Renderable):
 
     @classmethod
     def select_all_from(cls, table: str, alias: str) -> Self:
+        """Starts a ``SELECT alias.* FROM table alias``."""
         select = cls.select_from(table, alias)
         select.select_columns.append(f"{alias}.*")
         return select
 
     @classmethod
     def from_subquery_select(cls, subquery: SelectQuery, alias: str) -> Self:
+        """Starts a ``SELECT ... FROM (subquery) alias`` with no columns yet."""
         select = cls()
         select.from_subquery = subquery
         select.from_alias = alias
         return select
 
     def add_select_column(self, column: str) -> Self:
+        """Adds a column (or already-rendered expression) to the select list."""
         self.select_columns.append(column)
         return self
 
     def set_distinct(self) -> Self:
+        """Marks this query as ``SELECT DISTINCT``."""
         self.distinct = True
         return self
 
     def add_join(self, join: JoinClause) -> Self:
+        """Adds a join, in the order it should appear in the rendered SQL."""
         self.joins.append(join)
         return self
 
     def and_last_join_condition(self, extra_condition: str) -> Self:
+        """Conjoins an extra condition onto the most recently added join's ``ON`` clause; used to fold an
+        ``OPTIONAL MATCH``'s own ``WHERE`` predicate into the outer join condition.
+
+        Raises:
+            ValueError: if no join has been added yet.
+        """
         if not self.joins:
             raise ValueError("No join to amend.")
         last = self.joins[-1]
@@ -84,22 +123,29 @@ class SelectQuery(Renderable):
         return self
 
     def add_where(self, clause: str) -> Self:
+        """Adds a (conjoined) ``WHERE`` clause."""
         self.where_clauses.append(clause)
         return self
 
     def add_order_by(self, clause: str) -> Self:
+        """Adds an ``ORDER BY`` key, already rendered including its ``ASC``/``DESC`` suffix."""
         self.order_by_columns.append(clause)
         return self
 
     def set_limit(self, limit: int) -> Self:
+        """Sets the ``LIMIT`` count."""
         self.limit = limit
         return self
 
     def set_offset(self, offset: int) -> Self:
+        """Sets the ``OFFSET`` (Cypher ``SKIP``) count."""
         self.offset = offset
         return self
 
     def render(self, grammar: Grammar) -> str:
+        """Renders this builder's current state as SQL text, in
+        ``SELECT``/``FROM``/``JOIN``/``WHERE``/``ORDER BY``/``LIMIT`` order.
+        """
         select_clause = ("SELECT DISTINCT " if self.distinct else "SELECT ") + ", ".join(self.select_columns)
         from_clause = (
             f"FROM ({self.from_subquery.render(grammar)}) {self.from_alias}"
@@ -128,18 +174,25 @@ class SelectQuery(Renderable):
 
 @dataclass
 class InsertQuery(Renderable):
+    """An ``INSERT`` statement builder. :meth:`render` always raises ``NotImplementedError``, since this
+    project is read-only; these builders exist only as placeholders for a future write-mode enhancement.
+    """
+
     table: str
     values: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def into(cls, table: str) -> Self:
+        """Starts an ``INSERT INTO table``."""
         return cls(table=table)
 
     def value(self, column: str, expression: str) -> Self:
+        """Sets a column's value expression."""
         self.values[column] = expression
         return self
 
     def is_empty(self) -> bool:
+        """Whether no column values have been set yet."""
         return not self.values
 
     def render(self, grammar: Grammar) -> str:
@@ -149,26 +202,35 @@ class InsertQuery(Renderable):
 
 @dataclass
 class UpdateQuery(Renderable):
+    """An ``UPDATE`` statement builder. :meth:`render` always raises ``NotImplementedError``; see
+    :class:`InsertQuery`.
+    """
+
     table: str
     assignments: dict[str, str] = field(default_factory=dict)
     where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
     def table_name(cls, table: str) -> Self:
+        """Starts an ``UPDATE table``."""
         return cls(table=table)
 
     def set(self, column: str, expression: str) -> Self:
+        """Adds a ``SET column = expression`` assignment."""
         self.assignments[column] = expression
         return self
 
     def where(self, clause: str) -> Self:
+        """Adds a (conjoined) ``WHERE`` clause."""
         self.where_clauses.append(clause)
         return self
 
     def has_assignments(self) -> bool:
+        """Whether any column assignment has been added."""
         return bool(self.assignments)
 
     def has_where_clause(self) -> bool:
+        """Whether any ``WHERE`` clause has been added."""
         return bool(self.where_clauses)
 
     def render(self, grammar: Grammar) -> str:
@@ -178,18 +240,25 @@ class UpdateQuery(Renderable):
 
 @dataclass
 class DeleteQuery(Renderable):
+    """A ``DELETE`` statement builder. :meth:`render` always raises ``NotImplementedError``; see
+    :class:`InsertQuery`.
+    """
+
     table: str
     where_clauses: list[str] = field(default_factory=list)
 
     @classmethod
     def from_table(cls, table: str) -> Self:
+        """Starts a ``DELETE FROM table``."""
         return cls(table=table)
 
     def where(self, clause: str) -> Self:
+        """Adds a (conjoined) ``WHERE`` clause."""
         self.where_clauses.append(clause)
         return self
 
     def has_where_clause(self) -> bool:
+        """Whether any ``WHERE`` clause has been added."""
         return bool(self.where_clauses)
 
     def render(self, grammar: Grammar) -> str:
@@ -198,10 +267,15 @@ class DeleteQuery(Renderable):
 
 
 class StandardGrammar:
+    """The default :class:`Grammar`: ANSI SQL double-quoted identifiers, with ``"`` escaped by doubling."""
+
     def name(self) -> str:
         return "standard"
 
     def quote_identifier(self, identifier: str) -> str:
+        """Raises:
+        ValueError: if ``identifier`` is ``None``.
+        """
         if identifier is None:
             raise ValueError("identifier cannot be None")
         return ".".join(f'"{part.replace("\"", "\"\"")}"' for part in identifier.split("."))

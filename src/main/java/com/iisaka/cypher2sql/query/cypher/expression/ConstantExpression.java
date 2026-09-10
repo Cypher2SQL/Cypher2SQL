@@ -2,6 +2,12 @@ package com.iisaka.cypher2sql.query.cypher.expression;
 
 import org.neo4j.cypher.internal.parser.v25.Cypher25Parser;
 
+/**
+ * A literal constant: a number, string, boolean, or {@code null}.
+ *
+ * @param value the literal's Java value ({@link Long}, {@link Double}, {@link String}, {@link Boolean}, or
+ *              {@code null} for Cypher's {@code null})
+ */
 public record ConstantExpression(Object value) implements Expression {
     @Override
     public boolean isAggregate() {

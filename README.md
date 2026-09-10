@@ -427,6 +427,14 @@ final Query query = Query.of("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, 
 final String sql = query.asSql(schema).render(new StandardGrammar());
 ```
 
+### Generate API Docs
+
+```bash
+JAVA_HOME=$(/usr/libexec/java_home -v 21) ./gradlew javadoc
+```
+
+Output is written to `build/docs/javadoc/index.html`.
+
 ## Python Usage
 
 ### Install Dev/Test Dependencies
@@ -467,6 +475,14 @@ query = Query.parse("MATCH (p:Person)-[:ACTED_IN]->(m:Movie) RETURN p, m")
 sql = Mapping(schema).to_sql(query).render(StandardGrammar())
 print(sql)
 ```
+
+### Generate API Docs
+
+```bash
+PYTHONPATH=src/main/python .venv/bin/python -m pdoc --output-dir build/docs/pdoc cypher2sql
+```
+
+Output is written to `build/docs/pdoc/cypher2sql.html`.
 
 ## CI
 

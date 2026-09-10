@@ -6,6 +6,10 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+/**
+ * The Cypher functions this project can translate to SQL, mapping each one's Cypher name to its SQL
+ * equivalent and whether it is an aggregate.
+ */
 public enum KnownFunction {
     COUNT("count", "COUNT", true),
     SUM("sum", "SUM", true),
@@ -47,14 +51,17 @@ public enum KnownFunction {
         this.aggregate = aggregate;
     }
 
+    /** The SQL function name to render this as. */
     public String sqlName() {
         return sqlName;
     }
 
+    /** Whether this function aggregates rows, e.g. {@code count}, {@code sum}. */
     public boolean aggregate() {
         return aggregate;
     }
 
+    /** Looks up a known function by its Cypher name, case-insensitively. */
     public static Optional<KnownFunction> forName(final String cypherName) {
         return Optional.ofNullable(BY_CYPHER_NAME.get(cypherName.toLowerCase()));
     }

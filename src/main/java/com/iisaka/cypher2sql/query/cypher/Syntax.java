@@ -17,6 +17,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+/**
+ * Reflection-based wrapper around the ANTLR-generated Cypher lexer/parser, so callers depend only on
+ * {@link Query} and this class rather than on the third-party grammar's generated types directly.
+ * The lexer, parser, and entry-rule classes can be overridden with system properties
+ * ({@code cypher.antlr.lexer}, {@code cypher.antlr.parser}, {@code cypher.antlr.entryRules}) to target a
+ * different generated grammar without a code change.
+ */
 public final class Syntax {
     private static final List<String> DEFAULT_ENTRY_RULES = List.of(
             "statement",
@@ -34,6 +41,7 @@ public final class Syntax {
         this.entryRules = entryRules;
     }
 
+    /** Creates a {@code Syntax} bound to the openCypher 25 grammar (or its system-property overrides). */
     public static Syntax cypher25() {
         final String lexer = System.getProperty("cypher.antlr.lexer", "org.neo4j.cypher.internal.parser.v25.Cypher25Lexer");
         final String parser = System.getProperty("cypher.antlr.parser", "org.neo4j.cypher.internal.parser.v25.Cypher25Parser");
@@ -44,7 +52,12 @@ public final class Syntax {
         return new Syntax(lexer, parser, entryRules);
     }
 
-    // Wrapper around ANTLR setup so parser wiring and entry-rule selection stay centralized.
+    /**
+     * Parses a Cypher query string into an ANTLR parse tree, trying each configured entry rule in turn.
+     *
+     * @throws IllegalArgumentException if the text is not syntactically valid Cypher
+     * @throws IllegalStateException    if the lexer/parser classes cannot be instantiated, or no entry rule matches
+     */
     public ParsedCypher parse(final String cypher) {
         final CharStream input = CharStreams.fromString(cypher);
         final Lexer lexer = instantiateLexer(input);
@@ -56,11 +69,15 @@ public final class Syntax {
         return new ParsedCypher(parseTree, parser.getRuleNames());
     }
 
+    /** Convenience for {@link #parse(String)} when only the parse tree, not the rule names, is needed. */
     public ParseTree parseTree(final String cypher) {
         return parse(cypher).parseTree();
     }
 
-    // Keeps parser internals local while exposing only parse-tree + domain projections.
+    /**
+     * The result of a successful parse: the ANTLR parse tree plus the generated parser's rule-name table,
+     * needed to resolve a context node's {@code getRuleIndex()} back to a rule name.
+     */
     public record ParsedCypher(
             ParseTree parseTree,
             String[] ruleNames) {

@@ -15,6 +15,13 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
+/**
+ * The full graph-to-relational mapping for a Cypher-to-SQL translation: every {@link NodeMapping} and
+ * {@link EdgeMapping}, indexed for lookup by label and by relationship type (with or without directed
+ * endpoint labels, to resolve ambiguity when a type is reused between different label pairs). Can be
+ * built programmatically via {@link #addNode}/{@link #addEdge}, or loaded from YAML or JSON via the
+ * {@code fromYaml*}/{@code fromJson*} factories.
+ */
 public final class SchemaDefinition {
     private static final Yaml YAML = new Yaml();
     private static final ObjectMapper JSON = new ObjectMapper();
@@ -23,12 +30,14 @@ public final class SchemaDefinition {
     private final Map<String, EdgeMapping> edgesByKey = new LinkedHashMap<>();
     private final Map<String, java.util.List<EdgeMapping>> edgesByType = new LinkedHashMap<>();
 
+    /** Registers a node mapping, keyed by its label. */
     public SchemaDefinition addNode(final NodeMapping mapping) {
         Objects.requireNonNull(mapping, "mapping");
         nodes.put(mapping.label(), mapping);
         return this;
     }
 
+    /** Registers an edge mapping, keyed by its type and directed from/to labels. */
     public SchemaDefinition addEdge(final EdgeMapping mapping) {
         Objects.requireNonNull(mapping, "mapping");
         final String key = edgeKey(mapping.type(), mapping.fromLabel(), mapping.toLabel());
@@ -37,6 +46,7 @@ public final class SchemaDefinition {
         return this;
     }
 
+    /** @throws IllegalArgumentException if no node mapping is registered for {@code label} */
     public NodeMapping nodeForLabel(final String label) {
         final NodeMapping mapping = nodes.get(label);
         if (mapping == null) {
@@ -45,6 +55,12 @@ public final class SchemaDefinition {
         return mapping;
     }
 
+    /**
+     * Looks up an edge mapping by type alone, for an anonymous relationship whose endpoint labels are
+     * unknown.
+     *
+     * @throws IllegalArgumentException if no mapping exists for {@code type}, or more than one does
+     */
     public EdgeMapping edgeForType(final String type) {
         final java.util.List<EdgeMapping> mappings = edgesByType.get(type);
         if (mappings == null || mappings.isEmpty()) {
@@ -59,6 +75,12 @@ public final class SchemaDefinition {
         return mappings.get(0);
     }
 
+    /**
+     * Looks up an edge mapping by type and directed from/to labels, resolving ambiguity when a type is
+     * reused between different label pairs.
+     *
+     * @throws IllegalArgumentException if no mapping exists for this exact type/label combination
+     */
     public EdgeMapping edgeForType(final String type, final String fromLabel, final String toLabel) {
         final EdgeMapping mapping = edgesByKey.get(edgeKey(type, fromLabel, toLabel));
         if (mapping == null) {
@@ -68,6 +90,13 @@ public final class SchemaDefinition {
         return mapping;
     }
 
+    /**
+     * Looks up an edge mapping by type and label pair, in either direction, for a Cypher pattern written
+     * without an arrowhead.
+     *
+     * @throws IllegalArgumentException if no mapping exists for either direction, or both directions match
+     *                                   different mappings
+     */
     public EdgeMapping edgeForTypeUndirected(final String type, final String leftLabel, final String rightLabel) {
         final EdgeMapping forward = edgesByKey.get(edgeKey(type, leftLabel, rightLabel));
         final EdgeMapping reverse = edgesByKey.get(edgeKey(type, rightLabel, leftLabel));
@@ -86,6 +115,12 @@ public final class SchemaDefinition {
                 "No edge mapping for undirected type/labels: " + type + " (" + leftLabel + "<->" + rightLabel + ")");
     }
 
+    /**
+     * Loads a schema from a YAML document on the classpath.
+     *
+     * @throws IllegalArgumentException if the resource does not exist or its content is malformed
+     * @throws IllegalStateException    if the resource cannot be read
+     */
     public static SchemaDefinition fromYamlResource(final String resourcePath) {
         Objects.requireNonNull(resourcePath, "resourcePath");
         try (InputStream input = SchemaDefinition.class.getClassLoader().getResourceAsStream(resourcePath)) {
@@ -98,6 +133,12 @@ public final class SchemaDefinition {
         }
     }
 
+    /**
+     * Loads a schema from a YAML file.
+     *
+     * @throws IllegalArgumentException if the content is malformed
+     * @throws IllegalStateException    if the file cannot be read
+     */
     public static SchemaDefinition fromYamlPath(final Path path) {
         Objects.requireNonNull(path, "path");
         try (InputStream input = Files.newInputStream(path)) {
@@ -107,6 +148,11 @@ public final class SchemaDefinition {
         }
     }
 
+    /**
+     * Loads a schema from a YAML string.
+     *
+     * @throws IllegalArgumentException if the content is malformed
+     */
     public static SchemaDefinition fromYamlString(final String yaml) {
         Objects.requireNonNull(yaml, "yaml");
         try (InputStream input = new ByteArrayInputStream(yaml.getBytes(StandardCharsets.UTF_8))) {
@@ -116,6 +162,12 @@ public final class SchemaDefinition {
         }
     }
 
+    /**
+     * Loads a schema from a JSON document on the classpath.
+     *
+     * @throws IllegalArgumentException if the resource does not exist or its content is malformed
+     * @throws IllegalStateException    if the resource cannot be read
+     */
     public static SchemaDefinition fromJsonResource(final String resourcePath) {
         Objects.requireNonNull(resourcePath, "resourcePath");
         try (InputStream input = SchemaDefinition.class.getClassLoader().getResourceAsStream(resourcePath)) {
@@ -128,6 +180,12 @@ public final class SchemaDefinition {
         }
     }
 
+    /**
+     * Loads a schema from a JSON file.
+     *
+     * @throws IllegalArgumentException if the content is malformed
+     * @throws IllegalStateException    if the file cannot be read
+     */
     public static SchemaDefinition fromJsonPath(final Path path) {
         Objects.requireNonNull(path, "path");
         try (InputStream input = Files.newInputStream(path)) {
@@ -137,6 +195,11 @@ public final class SchemaDefinition {
         }
     }
 
+    /**
+     * Loads a schema from a JSON string.
+     *
+     * @throws IllegalArgumentException if the content is malformed
+     */
     public static SchemaDefinition fromJsonString(final String json) {
         Objects.requireNonNull(json, "json");
         try (InputStream input = new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8))) {
