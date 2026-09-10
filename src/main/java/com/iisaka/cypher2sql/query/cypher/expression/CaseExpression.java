@@ -57,4 +57,22 @@ public record CaseExpression(
         }
         return new CaseExpression(subject, List.copyOf(whenThens), elseExpression);
     }
+
+    static Expression from(final Cypher25Parser.ExtendedCaseExpressionContext context) {
+        final Expression subject = Expression.parse(context.expression(0));
+
+        final List<WhenThen> whenThens = new ArrayList<>();
+        for (final Cypher25Parser.ExtendedCaseAlternativeContext alternative : context.extendedCaseAlternative()) {
+            final List<Cypher25Parser.ExtendedWhenContext> whens = alternative.extendedWhen();
+            if (whens.size() != 1 || !(whens.get(0) instanceof Cypher25Parser.WhenEqualsContext whenEquals)) {
+                throw Expression.unsupported(alternative);
+            }
+            whenThens.add(new WhenThen(
+                    Expression.parse(whenEquals.expression()),
+                    Expression.parse(alternative.expression())));
+        }
+
+        final Expression elseExpression = context.elseExp != null ? Expression.parse(context.elseExp) : null;
+        return new CaseExpression(subject, List.copyOf(whenThens), elseExpression);
+    }
 }

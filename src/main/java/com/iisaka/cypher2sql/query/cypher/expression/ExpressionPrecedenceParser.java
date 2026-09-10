@@ -153,7 +153,7 @@ final class ExpressionPrecedenceParser {
             return CaseExpression.from(context.caseExpression());
         }
         if (context.extendedCaseExpression() != null) {
-            throw Expression.unsupported(context.extendedCaseExpression());
+            return CaseExpression.from(context.extendedCaseExpression());
         }
         throw Expression.unsupported(context);
     }

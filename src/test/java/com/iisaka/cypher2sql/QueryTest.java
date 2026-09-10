@@ -328,13 +328,15 @@ class QueryTest {
     }
 
     @Test
-    void parsingSimpleCaseWithSubjectThrowsUnsupported() {
-        // Cypher's grammar routes a subject-CASE ("CASE <expr> WHEN ...") through
-        // extendedCaseExpression, which this codebase does not support yet — only the
-        // searched form ("CASE WHEN <predicate> THEN ...") is implemented.
-        final IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> Query.of("MATCH (p:Person) RETURN CASE p.id WHEN 1 THEN 'one' ELSE 'other' END"));
-        assertTrue(ex.getMessage().startsWith("Unsupported expression:"));
+    void rendersSimpleCaseReturnExpressionWithSubject() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of(
+                "MATCH (p:Person) RETURN CASE p.id WHEN 1 THEN 'one' ELSE 'other' END AS label");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT CASE t0.id WHEN 1 THEN 'one' ELSE 'other' END AS label FROM \"people\" t0",
+                sql);
     }
 
     @Test
