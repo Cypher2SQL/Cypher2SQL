@@ -328,6 +328,18 @@ class QueryTest {
     }
 
     @Test
+    void rendersSimpleCaseReturnExpressionWithSubject() {
+        final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
+        final Query query = Query.of(
+                "MATCH (p:Person) RETURN CASE p.id WHEN 1 THEN 'one' ELSE 'other' END AS label");
+        final String sql = query.asSql(schema).render(new StandardGrammar());
+
+        assertEquals(
+                "SELECT CASE t0.id WHEN 1 THEN 'one' ELSE 'other' END AS label FROM \"people\" t0",
+                sql);
+    }
+
+    @Test
     void rendersFunctionReturnExpressionWithoutAlias() {
         final SchemaDefinition schema = SchemaDefinition.fromYamlResource("schema.yaml");
         final Query query = Query.of("MATCH (p:Person) RETURN abs(p.id)");
