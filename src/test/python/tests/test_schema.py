@@ -53,6 +53,15 @@ class NodeMappingTest(unittest.TestCase):
             mapping.join_on_columns("t0", ["a", "b"], "t1", ["c", "d"]),
         )
 
+    def test_matches_label_checks_labels_and_inherits(self) -> None:
+        mapping = NodeMapping(
+            label="Employee", labels=["Employee", "Staff"], inherits=["Person"], table="employees",
+        )
+
+        self.assertTrue(mapping.matches_label("Staff"))
+        self.assertTrue(mapping.matches_label("Person"))
+        self.assertFalse(mapping.matches_label("Movie"))
+
 
 class EdgeMappingTest(unittest.TestCase):
     def test_self_referential_factory_defaults_cardinality(self) -> None:
@@ -69,6 +78,16 @@ class EdgeMappingTest(unittest.TestCase):
         self.assertEqual("ONE_TO_MANY", mapping.cardinality.value)
         self.assertEqual("id", mapping.parent_primary_key)
         self.assertEqual("author_id", mapping.child_foreign_key)
+
+    def test_many_to_one_factory_builds_many_to_one_cardinality(self) -> None:
+        mapping = EdgeMapping.for_many_to_one(
+            "AUTHORED", "Movie", "Person", ["author_id"], ["id"], {},
+        )
+
+        self.assertEqual(RelationshipKind.MANY_TO_ONE, mapping.relationship_kind)
+        self.assertEqual("MANY_TO_ONE", mapping.cardinality.value)
+        self.assertEqual(["author_id"], mapping.child_foreign_keys)
+        self.assertEqual(["id"], mapping.parent_primary_keys)
 
     def test_scalar_join_key_is_none_for_composite_join_keys(self) -> None:
         mapping = EdgeMapping(

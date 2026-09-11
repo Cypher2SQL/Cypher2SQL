@@ -60,6 +60,9 @@ class NodeMapping:
             raise ValueError(f"Composite primary key is not scalar for label: {self.label}")
         return f"{alias}.{self.primary_keys[0]}"
 
+    def matches_label(self, other_label: str) -> bool:
+        return other_label in self.labels or other_label in self.inherits
+
     def join_on_columns(
         self, alias: str, columns: list[str], other_alias: str, other_columns: list[str]
     ) -> str:
@@ -187,6 +190,27 @@ class EdgeMapping:
             cardinality=Cardinality.ONE_TO_MANY,
             parent_primary_key=parent_primary_key,
             child_foreign_key=child_foreign_key,
+        )
+
+    @classmethod
+    def for_many_to_one(
+        cls,
+        type: str,
+        from_label: str,
+        to_label: str,
+        from_foreign_keys: list[str],
+        to_primary_keys: list[str],
+        properties: dict[str, PropertyMapping],
+    ) -> "EdgeMapping":
+        return cls(
+            type=type,
+            from_label=from_label,
+            to_label=to_label,
+            relationship_kind=RelationshipKind.MANY_TO_ONE,
+            cardinality=Cardinality.MANY_TO_ONE,
+            parent_primary_keys=list(to_primary_keys),
+            child_foreign_keys=list(from_foreign_keys),
+            properties=properties,
         )
 
 
