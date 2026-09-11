@@ -6,6 +6,7 @@ import com.iisaka.cypher2sql.schema.EdgeMapping;
 import com.iisaka.cypher2sql.schema.NodeMapping;
 import com.iisaka.cypher2sql.schema.SchemaDefinition;
 
+/** A minimal runnable example: builds an in-memory schema, translates a Cypher query, and prints the SQL. */
 public class Main {
     public static void main(final String[] args) {
         final SchemaDefinition schema = new SchemaDefinition()

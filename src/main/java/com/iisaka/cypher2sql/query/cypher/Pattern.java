@@ -11,8 +11,27 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * A single graph pattern from a {@code MATCH} clause, e.g. {@code (p:Person)-[:ACTED_IN]->(m:Movie)}.
+ *
+ * @param nodes the pattern's nodes, in traversal order; {@code edges.size() == nodes.size() - 1}
+ * @param edges the relationships connecting consecutive nodes
+ */
 public record Pattern(List<Node> nodes, List<Edge> edges) {
 
+    /**
+     * Resolves this pattern's node labels and edge mappings against the schema, producing a bound pattern
+     * ready for SQL translation. Anonymous or unlabeled nodes are inferred from adjacent edges or from an
+     * already-bound variable of the same name; {@code boundByVariable} and {@code nextAliasIndex} are updated
+     * in place so later patterns can reuse variables bound by earlier ones.
+     *
+     * @param schema           the graph-to-relational mapping to resolve against
+     * @param boundByVariable  variable name to already-bound node, shared and extended across all patterns in a query
+     * @param nextAliasIndex   single-element counter used to allocate the next {@code t}<i>N</i> table alias
+     * @param optional         whether this pattern belongs to an {@code OPTIONAL MATCH}
+     * @param whereExpression  the enclosing {@code MATCH} clause's {@code WHERE} predicate, or {@code null}
+     * @throws IllegalArgumentException if the pattern has no nodes, or a node's label cannot be resolved
+     */
     public BoundPattern bind(
             final SchemaDefinition schema,
             final Map<String, BoundNode> boundByVariable,

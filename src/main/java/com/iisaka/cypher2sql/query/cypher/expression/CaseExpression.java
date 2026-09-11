@@ -7,11 +7,20 @@ import org.neo4j.cypher.internal.parser.v25.Cypher25Parser;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * A {@code CASE} expression, in either its subject form ({@code CASE p.status WHEN ... }) or generic form
+ * ({@code CASE WHEN ... }).
+ *
+ * @param subject       the subject expression for a subject-form {@code CASE}, or {@code null} for the generic form
+ * @param whenThens     the {@code WHEN}/{@code THEN} branches, in order
+ * @param elseExpression the {@code ELSE} expression, or {@code null} if absent
+ */
 public record CaseExpression(
         Expression subject,
         List<WhenThen> whenThens,
         Expression elseExpression) implements Expression {
 
+    /** One {@code WHEN}/{@code THEN} branch of a {@link CaseExpression}. */
     public record WhenThen(Expression whenExpression, Expression thenExpression) {
     }
 

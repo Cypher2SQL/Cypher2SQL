@@ -1,5 +1,6 @@
 package com.iisaka.cypher2sql.query.cypher.expression;
 
+/** An operator usable in a {@link BinaryExpression} or {@link UnaryExpression}, paired with its SQL rendering. */
 public enum Operator {
     ADD("+"),
     SUBTRACT("-"),
@@ -24,6 +25,7 @@ public enum Operator {
         this.sql = sql;
     }
 
+    /** This operator's SQL rendering. */
     public String sql() {
         return sql;
     }

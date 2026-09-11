@@ -10,12 +10,31 @@ from .sql_query import SelectQuery
 
 @dataclass
 class Mapping:
+    """Binds a parsed :class:`~cypher2sql.cypher_query.Query` against a schema and renders it to SQL.
+
+    This is the Python entry point for translation, mirroring Java's
+    ``com.iisaka.cypher2sql.query.cypher.Query.asSql``/``asReadQuery``.
+    """
+
     schema: SchemaDefinition
 
     def to_sql(self, query: Query) -> SelectQuery:
+        """Binds ``query`` against :attr:`schema` and renders it as a SQL ``SELECT``.
+
+        Raises:
+            NotImplementedError: if the query uses a feature not yet translatable to SQL.
+            ValueError: if a pattern's labels or properties cannot be resolved against the schema.
+        """
         return self.to_read_query(query).as_sql()
 
     def to_read_query(self, query: Query) -> ReadQuery:
+        """Binds ``query``'s patterns and clauses against :attr:`schema`, producing the intermediate
+        read-query representation that :meth:`to_sql` renders to SQL.
+
+        Raises:
+            NotImplementedError: if the query uses a feature not yet translatable to SQL.
+            ValueError: if a pattern's labels or properties cannot be resolved against the schema.
+        """
         if query.has_variable_length_traversal:
             return self._translate_variable_length_traversal(query)
         if query.has_with_clause:

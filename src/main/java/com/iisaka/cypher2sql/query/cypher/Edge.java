@@ -2,6 +2,10 @@ package com.iisaka.cypher2sql.query.cypher;
 
 import java.util.Objects;
 
+/**
+ * A single relationship traversal within a Cypher pattern, e.g. {@code -[r:ACTED_IN]->}.
+ * The {@link #type()} and {@link #variable()} may be {@code null} for an untyped or anonymous relationship.
+ */
 public final class Edge {
     private final String variable;
     private final String type;
@@ -13,21 +17,28 @@ public final class Edge {
         this.direction = direction;
     }
 
+    /** The relationship's bound variable name, or {@code null} if anonymous. */
     public String variable() {
         return variable;
     }
 
+    /** The relationship type, or {@code null} if untyped. */
     public String type() {
         return type;
     }
 
+    /** The arrow direction the relationship was written with in the Cypher pattern. */
     public Direction direction() {
         return direction;
     }
 
+    /** The arrow direction of a relationship pattern as written in Cypher. */
     public enum Direction {
+        /** Written as {@code -[...]->}. */
         LEFT_TO_RIGHT,
+        /** Written as {@code <-[...]-}. */
         RIGHT_TO_LEFT,
+        /** Written as {@code -[...]-}, with no arrowhead. */
         UNDIRECTED
     }
 

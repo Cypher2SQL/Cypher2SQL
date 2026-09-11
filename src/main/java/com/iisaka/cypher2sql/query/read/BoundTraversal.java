@@ -7,6 +7,7 @@ import com.iisaka.cypher2sql.schema.EdgeMapping;
 
 import java.util.List;
 
+/** A Cypher {@link Edge} resolved against an {@link EdgeMapping} and connecting two {@link BoundNode}s. */
 public final class BoundTraversal {
     private final Edge edge;
     private final EdgeMapping mapping;
@@ -24,22 +25,34 @@ public final class BoundTraversal {
         this.right = right;
     }
 
+    /** The unresolved Cypher edge this was bound from. */
     public Edge edge() {
         return edge;
     }
 
+    /** The schema mapping this edge's type resolved to. */
     public EdgeMapping mapping() {
         return mapping;
     }
 
+    /** The node this traversal starts from, as written in the Cypher pattern. */
     public BoundNode left() {
         return left;
     }
 
+    /** The node this traversal ends at, as written in the Cypher pattern. */
     public BoundNode right() {
         return right;
     }
 
+    /**
+     * Adds the SQL join(s) for this traversal to {@code select}, choosing the join strategy from the
+     * mapping's {@link EdgeMapping.RelationshipKind}, and returns the SQL column expression(s) this
+     * relationship would project if returned by variable.
+     *
+     * @param nextJoinAliasCounter single-element counter used to allocate the next {@code j}<i>N</i> join alias
+     * @throws IllegalArgumentException if the mapping's parent/child labels do not match the bound nodes
+     */
     public List<String> applyTo(final SelectQuery select, final int[] nextJoinAliasCounter, final JoinClause.JoinType joinType) {
         return switch (mapping.relationshipKind()) {
             case JOIN_TABLE -> applyJoinTable(select, nextJoinAliasCounter, joinType);
